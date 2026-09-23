@@ -58,15 +58,21 @@ keyVariable :: ProviderKind -> String
 keyVariable OpenAICompatible = "OPENAI_API_KEY"
 keyVariable OpenRouter       = "OPENROUTER_API_KEY"
 
-encodeRequest :: Request -> Value
-encodeRequest r =
+-- | Anthropic models need an explicit cache marker; other providers cache
+-- automatically. OpenRouter moves a top-level marker to the last cacheable
+-- block, so one field covers the whole growing conversation.
+encodeRequest :: ProviderKind -> Request -> Value
+encodeRequest kind r =
   object $
     [ "model" .= reqModel r
     , "messages" .= reqMessages r
     , "stream" .= True
     , "stream_options" .= object ["include_usage" .= True]
     ]
+      <> ["cache_control" .= object ["type" .= ("ephemeral" :: Text)] | caches]
       <> if null (reqTools r) then [] else ["tools" .= reqTools r, "tool_choice" .= ("auto" :: Text)]
+  where
+    caches = kind == OpenRouter && "anthropic/" `T.isPrefixOf` reqModel r
 
 -- | Decode a chat-completions response body. OpenRouter can report errors
 -- with status 200 and an @error@ object, so that is checked first.
@@ -109,7 +115,7 @@ newComplete p =
             base
               { H.method = "POST"
               , H.requestHeaders = headers p
-              , H.requestBody = H.RequestBodyLBS (encode (encodeRequest r))
+              , H.requestBody = H.RequestBodyLBS (encode (encodeRequest (providerKind p) r))
               }
       pure (Right (\sink r -> send mgr (prepare r) sink))
 

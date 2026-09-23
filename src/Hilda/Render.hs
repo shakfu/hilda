@@ -129,8 +129,10 @@ estimateTokens r = (T.length (truncateMiddle resultLimit r) + 3) `div` 4
 
 renderUsage :: Usage -> Text
 renderUsage u =
-  tshow (usagePrompt u) <> " in / " <> tshow (usageCompletion u) <> " out"
+  tshow (usagePrompt u) <> " in" <> cached <> " / " <> tshow (usageCompletion u) <> " out"
     <> maybe "" ((", " <>) . formatCost) (usageCost u)
+  where
+    cached = if usageCached u > 0 then " (" <> tshow (usageCached u) <> " cached)" else ""
 
 -- | Six decimals below one cent, otherwise four.
 formatCost :: Double -> Text

@@ -36,7 +36,7 @@ spec = do
         , "{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}"
         , "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"cost\":0.5}}"
         ]
-        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 (Just 0.5)), ["Hel", "lo"])
+        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)), ["Hel", "lo"])
 
     it "merges tool call pieces by index" $
       fmap (replyCalls . fst) (fold

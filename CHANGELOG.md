@@ -20,7 +20,9 @@ First release.
 
 - Streamed replies over server-sent events. The REPL prints text as it arrives; `--stream-json` emits `text_delta` events. A stream with no data for 300 s fails.
 
-- `--context-budget` (default 100,000 tokens): the oldest tool results are elided when the history exceeds it. The context size shows in the REPL footer, `/usage` and `--json` output.
+- `--context-budget` (default 100,000 tokens): the oldest tool results are elided when the history exceeds it, down to three quarters of the budget. The context size shows in the REPL footer, `/usage` and `--json` output.
+
+- Prompt caching: requests for `anthropic/` models on OpenRouter carry a top-level `cache_control` marker. Usage lines and `--json` report cached prompt tokens.
 
 - Headless runs with `-p TEXT` or `-p -` (stdin). Output as text, `--json` (one object) or `--stream-json` (one line per event, then the result). Exit codes: 0 finished, 1 error, 2 turn limit.
 

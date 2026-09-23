@@ -28,16 +28,20 @@ historyTokens hist = (sum (map chars hist) + 3) `div` 4
 elidedStub :: Int -> Text
 elidedStub n = "[elided to fit the context budget: " <> T.pack (show n) <> " characters; run the tool again if needed]"
 
--- | Elide the oldest tool results until the history fits @budget@ tokens.
+-- | Once over @budget@ tokens, elide the oldest tool results until the
+-- history fits three quarters of it. Trimming past the budget makes trims
+-- rarer; each one changes an early message and invalidates the provider's
+-- prompt cache from there on.
+--
 -- Results after the last assistant message, which the model has not seen,
 -- are kept. Returns the history, the number of results elided and the
 -- characters removed. A history that still does not fit is returned as is.
 fitContext :: Int -> [Message] -> ([Message], Int, Int)
 fitContext budget hist
-  | need <= 0 || null chosen = (hist, 0, 0)
+  | historyTokens hist <= budget || null chosen = (hist, 0, 0)
   | otherwise = (zipWith elide [0 ..] hist, length chosen, sum (map snd chosen))
   where
-    need = 4 * (historyTokens hist - budget)
+    need = 4 * (historyTokens hist - budget * 3 `div` 4)
     lastAssistant = maximum (-1 : [i | (i, Assistant {}) <- indexed])
     indexed = zip [0 :: Int ..] hist
     -- (index, characters saved), oldest first.

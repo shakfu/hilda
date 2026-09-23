@@ -44,7 +44,7 @@ call :: Text -> Text -> Value -> ToolCall
 call i name args = ToolCall i name (T.pack (BL.unpack (encode args)))
 
 reply :: Maybe Text -> [ToolCall] -> Reply
-reply t cs = Reply t cs (Usage 10 5 (Just 0.5))
+reply t cs = Reply t cs (Usage 10 5 0 (Just 0.5))
 
 -- | Tool results in the order they were appended.
 toolResults :: [Message] -> [(Text, Text)]
@@ -72,7 +72,7 @@ spec = do
     out <- runTurn (mkEnv complete Yolo True) [] "write it"
     readFile path `shouldReturn` "hi"
     outStop out `shouldBe` Finished
-    outUsage out `shouldBe` Usage 20 10 (Just 1.0)
+    outUsage out `shouldBe` Usage 20 10 0 (Just 1.0)
     reqs <- requests
     length reqs `shouldBe` 2
     map fst (toolResults (reqMessages (reqs !! 1))) `shouldBe` ["c1"]

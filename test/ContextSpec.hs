@@ -35,8 +35,8 @@ spec = do
   it "leaves a history within budget alone" $
     fitContext 10000 history `shouldBe` (history, 0, 0)
 
-  it "elides the oldest results first, only as many as needed" $ do
-    let (hist, n, _) = fitContext 2500 history
+  it "elides the oldest results first, down to three quarters of the budget" $ do
+    let (hist, n, _) = fitContext 2900 history
     n `shouldBe` 1
     map T.length (results hist) `shouldSatisfy` \case
       [a, b, c] -> a < 100 && b == 4000 && c == 4000
@@ -51,12 +51,18 @@ spec = do
     let (hist, _, _) = fitContext 1 history
     [m | m <- hist, not (isResult m)] `shouldBe` [m | m <- history, not (isResult m)]
 
+  it "trims further than the budget requires" $ do
+    -- The history is about 3000 tokens. Fitting 2400 needs one result
+    -- elided; fitting three quarters of it (1800) needs two.
+    let (_, n, _) = fitContext 2400 history
+    n `shouldBe` 2
+
   it "is idempotent" $ do
     let (once, _, _) = fitContext 1 history
     fitContext 1 once `shouldBe` (once, 0, 0)
 
   it "reports the characters removed" $ do
-    let (_, _, chars) = fitContext 2500 history
+    let (_, _, chars) = fitContext 2900 history
     chars `shouldBe` 4000 - T.length (elidedStub 4000)
   where
     isResult = \case

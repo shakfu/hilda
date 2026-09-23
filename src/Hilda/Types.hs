@@ -35,16 +35,17 @@ data Message
 data Usage = Usage
   { usagePrompt     :: !Int
   , usageCompletion :: !Int
+  , usageCached     :: !Int -- ^ Prompt tokens served from the provider's cache.
   , usageCost       :: !(Maybe Double) -- ^ Reported by OpenRouter, in credits.
   }
   deriving stock (Eq, Show)
 
 -- | Costs add where reported; a reply without one leaves the total alone.
 instance Semigroup Usage where
-  Usage a b c <> Usage d e f = Usage (a + d) (b + e) (getSum <$> (Sum <$> c) <> (Sum <$> f))
+  Usage a b c d <> Usage e f g h = Usage (a + e) (b + f) (c + g) (getSum <$> (Sum <$> d) <> (Sum <$> h))
 
 instance Monoid Usage where
-  mempty = Usage 0 0 Nothing
+  mempty = Usage 0 0 0 Nothing
 
 -- | One model response.
 data Reply = Reply
@@ -96,8 +97,17 @@ instance ToJSON Message where
 
 instance ToJSON Usage where
   toJSON u =
-    object ["prompt_tokens" .= usagePrompt u, "completion_tokens" .= usageCompletion u, "cost" .= usageCost u]
+    object
+      [ "prompt_tokens" .= usagePrompt u
+      , "completion_tokens" .= usageCompletion u
+      , "cached_tokens" .= usageCached u
+      , "cost" .= usageCost u
+      ]
 
 instance FromJSON Usage where
   parseJSON = withObject "Usage" $ \o ->
-    Usage <$> o .:? "prompt_tokens" .!= 0 <*> o .:? "completion_tokens" .!= 0 <*> o .:? "cost"
+    Usage
+      <$> o .:? "prompt_tokens" .!= 0
+      <*> o .:? "completion_tokens" .!= 0
+      <*> (maybe (pure 0) (withObject "details" (\d -> d .:? "cached_tokens" .!= 0)) =<< o .:? "prompt_tokens_details")
+      <*> o .:? "cost"

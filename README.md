@@ -73,6 +73,12 @@ The number after `->` estimates the tokens of the result the model receives, at 
 
 Token usage prints after each REPL turn, at REPL exit and after a headless run. OpenRouter also reports cost (`usage.cost`, in credits), which hilda sums per session and includes in `--json` output. OpenAI-compatible servers report no cost, so none is shown.
 
+## Prompt caching
+
+Each model call resends the whole conversation, so caching the repeated start is the main cost saving. OpenAI, DeepSeek, Gemini 2.5+, Grok and several others cache automatically. Anthropic models need a marker. On OpenRouter, hilda adds a top-level `cache_control` to requests for `anthropic/` models, and OpenRouter places it on the last cacheable block ([OpenRouter docs](https://openrouter.ai/docs/features/prompt-caching)). Anthropic's cache lasts 5 minutes by default.
+
+Usage lines show cached tokens, e.g. `12000 in (9000 cached) / 300 out`. `--json` reports them as `cached_tokens`.
+
 Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
 
 Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.
@@ -81,7 +87,7 @@ Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting N
 
 ## Context budget
 
-hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. hilda prints `[context: elided N old tool results]` when this happens.
+hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results are elided until it fits three quarters of the budget. Each elision changes an early message and invalidates the prompt cache from there on, so trimming in larger steps keeps it rare. Elided results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. hilda prints `[context: elided N old tool results]` when this happens.
 
 - Results the model has not seen yet are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
 - Elision is written into the history, so the start of the conversation stays the same between calls and provider prompt caching keeps working.

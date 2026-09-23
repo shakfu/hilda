@@ -73,8 +73,10 @@ spec = do
 
   describe "renderUsage" $ do
     it "omits cost when the provider reports none" $
-      renderUsage (Usage 1200 30 Nothing) `shouldBe` "1200 in / 30 out"
+      renderUsage (Usage 1200 30 0 Nothing) `shouldBe` "1200 in / 30 out"
     it "shows cost when reported" $
-      renderUsage (Usage 1200 30 (Just 0.0213)) `shouldBe` "1200 in / 30 out, $0.0213"
+      renderUsage (Usage 1200 30 0 (Just 0.0213)) `shouldBe` "1200 in / 30 out, $0.0213"
+    it "shows cached tokens when there are any" $
+      renderUsage (Usage 1200 30 900 Nothing) `shouldBe` "1200 in (900 cached) / 30 out"
     it "keeps precision below one cent" $
       formatCost 0.000123 `shouldBe` "$0.000123"

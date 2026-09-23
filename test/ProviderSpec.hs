@@ -24,10 +24,18 @@ spec :: Spec
 spec = do
   describe "encodeRequest" $ do
     it "asks for a stream and omits tools when there are none" $
-      keys (encodeRequest (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
+      keys (encodeRequest OpenAICompatible (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
     it "sends tools with tool_choice auto" $ do
-      let v = encodeRequest (Request "m" [] [object []])
+      let v = encodeRequest OpenAICompatible (Request "m" [] [object []])
       keys v `shouldMatchList` ["model", "messages", "stream", "stream_options", "tools", "tool_choice"]
+
+  describe "cache_control" $ do
+    let has kind model = "cache_control" `elem` keys (encodeRequest kind (Request model [] []))
+    it "marks Anthropic models on OpenRouter" $
+      has OpenRouter "anthropic/claude-x" `shouldBe` True
+    it "leaves other models and providers alone" $ do
+      has OpenRouter "openai/gpt-x" `shouldBe` False
+      has OpenAICompatible "anthropic/claude-x" `shouldBe` False
 
   describe "message encoding" $ do
     it "encodes assistant tool calls in wire format" $
@@ -50,13 +58,16 @@ spec = do
   describe "decodeReply" $ do
     it "reads text and usage" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}"
-        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4 Nothing))
+        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4 0 Nothing))
     it "reads OpenRouter's cost" $
       fmap replyUsage (replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"cost\":0.0021}}")
-        `shouldBe` Right (Usage 3 4 (Just 0.0021))
+        `shouldBe` Right (Usage 3 4 0 (Just 0.0021))
+    it "reads cached prompt tokens" $
+      fmap replyUsage (replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":20}}}")
+        `shouldBe` Right (Usage 30 4 20 Nothing)
     it "adds costs where reported" $ do
-      Usage 1 2 (Just 0.5) <> Usage 3 4 Nothing `shouldBe` Usage 4 6 (Just 0.5)
-      Usage 1 2 Nothing <> Usage 3 4 Nothing `shouldBe` Usage 4 6 Nothing
+      Usage 1 2 0 (Just 0.5) <> Usage 3 4 0 Nothing `shouldBe` Usage 4 6 0 (Just 0.5)
+      Usage 1 2 0 Nothing <> Usage 3 4 0 Nothing `shouldBe` Usage 4 6 0 Nothing
     it "treats blank content as absent" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":\"  \"}}]}" `shouldBe` Right (Reply Nothing [] mempty)
     it "reads tool calls with string arguments" $
@@ -113,7 +124,7 @@ spec = do
             \data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n\
             \data: [DONE]\n\n"
       ((r, deltas), _) <- serve [Canned 200 "text/event-stream" events]
-      r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 Nothing))
+      r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 0 Nothing))
       deltas `shouldBe` ["Hel", "lo"]
     it "passes a plain JSON reply to the sink in one piece" $ do
       ((_, deltas), _) <- serve [ok]
