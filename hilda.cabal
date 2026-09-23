@@ -1,0 +1,85 @@
+cabal-version:      3.0
+name:               hilda
+version:            0.1.0.0
+synopsis:           A small coding agent for OpenAI-compatible chat APIs
+license:            MIT
+license-file:       LICENSE
+author:             Shakeeb Alireza
+category:           Development
+build-type:         Simple
+extra-doc-files:    README.md
+
+common shared
+  default-language:   GHC2021
+  default-extensions:
+    DerivingStrategies
+    LambdaCase
+    OverloadedStrings
+
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wredundant-constraints
+
+  build-depends:
+    , aeson       >=2.2  && <2.4
+    , base        >=4.18 && <5
+    , bytestring  >=0.11 && <0.13
+    , directory   >=1.3.7 && <1.4
+    , filepath    >=1.4  && <1.6
+    , text        >=2.0  && <2.2
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    Hilda.Agent
+    Hilda.App
+    Hilda.Cli
+    Hilda.Policy
+    Hilda.Prompt
+    Hilda.Provider
+    Hilda.Repl
+    Hilda.State
+    Hilda.Tools
+    Hilda.Types
+
+  build-depends:
+    , containers            >=0.6  && <0.8
+    , haskeline             >=0.8  && <0.9
+    , http-client           >=0.7  && <0.8
+    , http-client-tls       >=0.3  && <0.5
+    , http-types            >=0.12 && <0.13
+    , optparse-applicative  >=0.17 && <0.20
+    , process               >=1.6.9 && <1.7
+    , unix                  >=2.7  && <2.9
+
+executable hilda
+  import:         shared
+  hs-source-dirs: app
+  main-is:        Main.hs
+  ghc-options:    -threaded -rtsopts
+  build-depends:  hilda
+
+test-suite spec
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Spec.hs
+  ghc-options:    -threaded
+  other-modules:
+    AgentSpec
+    AppSpec
+    CliSpec
+    PolicySpec
+    PromptSpec
+    ProviderSpec
+    ReplSpec
+    StateSpec
+    ToolsSpec
+
+  build-depends:
+    , containers
+    , hilda
+    , hspec                 >=2.10 && <2.12
+    , optparse-applicative
+    , temporary             >=1.3  && <1.4

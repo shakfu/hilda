@@ -1,0 +1,8 @@
+packages: .
+
+with-compiler: ghc-9.10.3
+
+-- Pin the Hackage snapshot so builds resolve the same plan until bumped.
+index-state: hackage.haskell.org 2026-09-23T19:28:45Z
+
+tests: True
