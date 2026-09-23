@@ -42,10 +42,15 @@ spec = do
       fmap optAgents (parse ["--agents", "a.md", "--agents", "b.md"]) `shouldBe` Just (Explicit ["a.md", "b.md"])
     it "rejects --system with --system-file" $
       parse ["--system", "x", "--system-file", "y"] `shouldBe` Nothing
-    it "prints the version and exits" $
-      case execParserPure defaultPrefs optionsInfo ["--version"] of
-        Failure f -> fst (renderFailure f "hilda") `shouldBe` T.unpack versionText
-        _ -> expectationFailure "--version did not exit"
+    it "prints the version and exits for -V and --version" $
+      mapM_
+        ( \flag -> case execParserPure defaultPrefs optionsInfo [flag] of
+            Failure f -> fst (renderFailure f "hilda") `shouldBe` T.unpack versionText
+            _ -> expectationFailure (flag <> " did not exit")
+        )
+        ["-V", "--version"]
+    it "accepts -M for --mode" $
+      fmap optMode (parse ["-M", "ask"]) `shouldBe` Just Ask
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 

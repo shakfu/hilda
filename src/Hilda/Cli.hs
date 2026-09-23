@@ -23,6 +23,7 @@ import Hilda.Provider
 import Hilda.Repl (runRepl)
 import Hilda.State
 import Options.Applicative
+import Options.Applicative.Help.Pretty (pretty, vsep)
 import System.Directory (getCurrentDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (exitFailure, exitWith)
@@ -53,13 +54,21 @@ data Options = Options
 
 optionsInfo :: ParserInfo Options
 optionsInfo =
-  info (options <**> simpleVersioner (T.unpack versionText) <**> helper) $
+  info (options <**> versionFlag <**> helper) $
     fullDesc
       <> progDesc "Coding agent for OpenAI-compatible APIs and OpenRouter. Starts a REPL unless -p is given."
-      <> footer
-        ( "Provider defaults to openrouter when OPENROUTER_API_KEY is set, else openai. "
-            <> "The last model per provider is remembered. Environment: OPENROUTER_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL."
+      <> footerDoc
+        ( Just . vsep . map pretty $
+            [ "Provider: openrouter when OPENROUTER_API_KEY is set, else openai."
+            , "Models: the last model per provider is saved in"
+            , "  $XDG_STATE_HOME/hilda/models.json (default ~/.local/state/hilda/)."
+            , "Environment: OPENROUTER_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL,"
+            , "  NO_COLOR (disables color)."
+            , "Exit codes: 0 finished, 1 error, 2 stopped by --max-turns." :: String
+            ]
         )
+  where
+    versionFlag = infoOption (T.unpack versionText) (short 'V' <> long "version" <> help "Show version information")
 
 options :: Parser Options
 options =
@@ -75,10 +84,12 @@ options =
     <*> optional (strOption (long "api-key-env" <> metavar "VAR" <> help "Read the API key from this environment variable"))
     <*> option
       (maybeReader (parseMode . T.pack))
-      (long "mode" <> metavar "yolo|ask|read-only" <> value Yolo <> help "Permission mode (default: yolo)")
+      ( short 'M' <> long "mode" <> metavar "yolo|ask|read-only" <> value Yolo
+          <> help "Permission mode. yolo: run all tools (default). ask: confirm write, edit and bash. read-only: offer only read."
+      )
     <*> optional
-      ( SystemText <$> strOption (long "system" <> metavar "TEXT" <> help "Replace the base system prompt")
-          <|> SystemFile <$> strOption (long "system-file" <> metavar "PATH" <> help "Replace the base system prompt with a file")
+      ( SystemText <$> strOption (long "system" <> metavar "TEXT" <> help "Replace the base system prompt (AGENTS.md still loads)")
+          <|> SystemFile <$> strOption (long "system-file" <> metavar "PATH" <> help "Replace the base system prompt with a file (AGENTS.md still loads)")
       )
     <*> ( flag' NoAgents (long "no-agents" <> help "Do not load AGENTS.md")
             <|> Explicit <$> some (strOption (long "agents" <> metavar "PATH" <> help "Load this AGENTS.md instead of discovering one (repeatable)"))
