@@ -2,6 +2,11 @@ cabal-version:      3.0
 name:               hilda
 version:            0.1.0
 synopsis:           A small coding agent for OpenAI-compatible chat APIs
+description:
+  A coding agent for OpenAI-compatible chat-completions servers and
+  OpenRouter, with four tools (read, write, edit, bash), permission modes,
+  streaming, prompt caching and a context budget. Runs headless or as a
+  REPL. See the README.
 license:            MIT
 license-file:       LICENSE
 author:             Shakeeb Alireza
@@ -10,6 +15,10 @@ build-type:         Simple
 extra-doc-files:
   CHANGELOG.md
   README.md
+
+source-repository head
+  type:     git
+  location: https://github.com/shakfu/hilda.git
 
 common shared
   default-language:   GHC2021

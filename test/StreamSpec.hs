@@ -10,7 +10,7 @@ import Hilda.Types
 import Test.Hspec
 
 -- | Fold JSON chunks into a reply, collecting the text deltas.
-fold :: [String] -> Either Text (Reply, [Text])
+fold :: [String] -> Either Text (Reply, [Delta])
 fold chunks = do
   values <- traverse decode chunks
   (p, deltas) <- foldlM step (emptyPartial, []) values
@@ -18,7 +18,7 @@ fold chunks = do
   where
     decode :: String -> Either Text Value
     decode = first (const "bad fixture") . eitherDecodeStrict . BS8.pack
-    step (p, ds) v = (\(p', d) -> (p', maybe ds (: ds) d)) <$> stepChunk p v
+    step (p, ds) v = (\(p', d) -> (p', reverse d <> ds)) <$> stepChunk p v
 
 spec :: Spec
 spec = do
@@ -36,7 +36,20 @@ spec = do
         , "{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}"
         , "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"cost\":0.5}}"
         ]
-        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)), ["Hel", "lo"])
+        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)), [TextDelta "Hel", TextDelta "lo"])
+
+    it "reads reasoning from reasoning_details" $
+      fmap snd (fold ["{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"hmm\"}]}}]}"])
+        `shouldBe` Right [ReasoningDelta "hmm"]
+    it "reads a plain reasoning string" $
+      fmap snd (fold ["{\"choices\":[{\"delta\":{\"reasoning\":\"hmm\"}}]}"])
+        `shouldBe` Right [ReasoningDelta "hmm"]
+    it "does not count reasoning sent in both forms twice" $
+      fmap snd (fold ["{\"choices\":[{\"delta\":{\"reasoning\":\"hmm\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"hmm\"}]}}]}"])
+        `shouldBe` Right [ReasoningDelta "hmm"]
+    it "keeps reasoning out of the reply text" $
+      fmap (replyText . fst) (fold ["{\"choices\":[{\"delta\":{\"reasoning\":\"hmm\",\"content\":\"ok\"}}]}"])
+        `shouldBe` Right (Just "ok")
 
     it "merges tool call pieces by index" $
       fmap (replyCalls . fst) (fold

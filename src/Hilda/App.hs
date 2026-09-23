@@ -35,6 +35,7 @@ data Config = Config
   , cfgSystem   :: Text
   , cfgMaxTurns :: Int
   , cfgBudget   :: Int -- ^ Context budget in estimated tokens.
+  , cfgCostLimit :: Maybe Double -- ^ Spending limit in credits (USD on OpenRouter).
   , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
   }
 
@@ -65,6 +66,7 @@ runHeadless cfg output prompt = do
       case outStop out of
         Finished  -> TIO.putStrLn (outText out)
         TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
+        CostLimit -> TIO.hPutStrLn stderr ("hilda: stopped at the cost limit, " <> maybe "" formatCost (usageCost (outUsage out)) <> " spent (--max-cost)")
         Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> e)
       TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> "]"))
     _ -> jsonLine (outcomeJson cfg out)
@@ -78,6 +80,8 @@ runHeadless cfg output prompt = do
         , envMode = cfgMode cfg
         , envMaxTurns = cfgMaxTurns cfg
         , envBudget = cfgBudget cfg
+        , envCostLimit = cfgCostLimit cfg
+        , envSpent = 0
         , envHooks = Hooks {onEvent = onEv, confirm = confirmTty}
         }
     emit paint = case output of
@@ -101,9 +105,11 @@ confirmTty call = do
       hFlush stderr
       isYes . T.pack <$> getLine
 
--- | Stream-json line for one piece of streamed reply text.
-deltaJson :: Text -> Value
-deltaJson t = object ["type" .= ("text_delta" :: Text), "text" .= t]
+-- | Stream-json line for one piece of a streamed reply.
+deltaJson :: Delta -> Value
+deltaJson = \case
+  TextDelta t -> object ["type" .= ("text_delta" :: Text), "text" .= t]
+  ReasoningDelta t -> object ["type" .= ("reasoning_delta" :: Text), "text" .= t]
 
 -- | Stream-json line for one event. Tool output is truncated as the model sees it.
 eventJson :: Event -> Value
@@ -121,6 +127,7 @@ eventJson = \case
       ]
   ContextTrimmed n chars ->
     object ["type" .= ("context_trimmed" :: Text), "results" .= n, "characters" .= chars]
+  CostUnknown -> object ["type" .= ("cost_unknown" :: Text)]
 
 outcomeJson :: Config -> Outcome -> Value
 outcomeJson cfg out =
@@ -144,6 +151,7 @@ outcomeJson cfg out =
     stopName = \case
       Finished  -> "finished"
       TurnLimit -> "turn_limit"
+      CostLimit -> "cost_limit"
       Failed _  -> "error"
 
 exitCodeFor :: Stop -> ExitCode
@@ -151,3 +159,4 @@ exitCodeFor = \case
   Finished  -> ExitSuccess
   Failed _  -> ExitFailure 1
   TurnLimit -> ExitFailure 2
+  CostLimit -> ExitFailure 3

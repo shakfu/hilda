@@ -63,6 +63,10 @@ spec = do
       fmap optBudget (parse []) `shouldBe` Just 100000
       fmap optBudget (parse ["--context-budget", "8000"]) `shouldBe` Just 8000
       parse ["--context-budget", "0"] `shouldBe` Nothing
+    it "parses --max-cost and rejects zero" $ do
+      fmap optCostLimit (parse []) `shouldBe` Just Nothing
+      fmap optCostLimit (parse ["--max-cost", "0.5"]) `shouldBe` Just (Just 0.5)
+      parse ["--max-cost", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 

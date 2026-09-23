@@ -18,13 +18,13 @@ First release.
 
 - Permission modes via `-M`/`--mode`: `yolo` (default), `ask`, `read-only`. `ask` shows every argument of the call in full, with control characters escaped.
 
-- Streamed replies over server-sent events. The REPL prints text as it arrives; `--stream-json` emits `text_delta` events. A stream with no data for 300 s fails.
+- Streamed replies over server-sent events. The REPL prints text as it arrives and shows `[thinking Ns]` while a model reasons; `--stream-json` emits `text_delta` and `reasoning_delta` events. A stream with no data for 300 s fails.
 
-- `--context-budget` (default 100,000 tokens): the oldest tool results are elided when the history exceeds it, down to three quarters of the budget. The context size shows in the REPL footer, `/usage` and `--json` output.
+- `--context-budget` (default 100,000 tokens): the oldest tool results and long tool-call arguments are elided when the history exceeds it, down to three quarters of the budget. The context size shows in the REPL footer, `/usage` and `--json` output.
 
 - Prompt caching: requests for `anthropic/` models on OpenRouter carry a top-level `cache_control` marker. Usage lines and `--json` report cached prompt tokens.
 
-- Headless runs with `-p TEXT` or `-p -` (stdin). Output as text, `--json` (one object) or `--stream-json` (one line per event, then the result). Exit codes: 0 finished, 1 error, 2 turn limit.
+- Headless runs with `-p TEXT` or `-p -` (stdin). Output as text, `--json` (one object) or `--stream-json` (one line per event, then the result). Exit codes: 0 finished, 1 error, 2 turn limit, 3 cost limit.
 
 - REPL with history, slash commands (`/mode`, `/model`, `/tools`, `/system`, `/usage`, `/clear`, `/quit`), `//` to send a prompt starting with `/`, and Ctrl-C to cancel a turn.
 
@@ -33,6 +33,8 @@ First release.
 - Token and cost totals per turn and per session. Cost comes from OpenRouter's `usage.cost`.
 
 - System prompt from `--system` or `--system-file`, extended by `--append-system` or `--append-system-file`, plus `AGENTS.md` files from the git root down to the working directory. `--agents` and `--no-agents` override discovery.
+
+- `--max-cost USD`: stop before the next model call once the prompt (REPL: session) has cost this much.
 
 - `-V`/`--version`.
 

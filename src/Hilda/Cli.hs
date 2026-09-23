@@ -51,6 +51,7 @@ data Options = Options
   , optAgents   :: AgentsSource
   , optMaxTurns :: Int
   , optBudget   :: Int
+  , optCostLimit :: Maybe Double
   }
   deriving stock (Eq, Show)
 
@@ -66,7 +67,7 @@ optionsInfo =
             , "  $XDG_STATE_HOME/hilda/models.json (default ~/.local/state/hilda/)."
             , "Environment: OPENROUTER_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL,"
             , "  NO_COLOR (disables color)."
-            , "Exit codes: 0 finished, 1 error, 2 stopped by --max-turns." :: String
+            , "Exit codes: 0 finished, 1 error, 2 stopped by --max-turns, 3 stopped by --max-cost." :: String
             ]
         )
   where
@@ -106,6 +107,11 @@ options =
       (auto >>= \n -> if n > 0 then pure n else readerError "must be positive")
       ( long "context-budget" <> metavar "TOKENS" <> value 100000 <> showDefault
           <> help "Elide the oldest tool results when the history exceeds this many tokens (estimated at 4 characters each)"
+      )
+    <*> optional
+      ( option
+          (auto >>= \x -> if x > 0 then pure x else readerError "must be positive")
+          (long "max-cost" <> metavar "USD" <> help "Stop before the next model call once the prompt (REPL: session) has cost this much. Needs a provider that reports cost")
       )
 
 -- | Pick the backend, key and model. Pure over the environment lookup and
@@ -175,6 +181,7 @@ main = do
           , cfgSystem = system
           , cfgMaxTurns = optMaxTurns o
           , cfgBudget = optBudget o
+          , cfgCostLimit = optCostLimit o
           , cfgRemember = remember
           }
   case optPrompt o of

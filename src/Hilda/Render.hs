@@ -76,12 +76,14 @@ data Live = Live
   , liveEcho   :: Bool -- ^ Print reply text as it streams.
   }
 
--- | Wrap a backend for terminal output on @h@. The waiting line is erased
+-- | Wrap a backend for terminal output on @h@. The waiting line reads
+-- @[thinking Ns]@ once reasoning arrives, and is erased
 -- once, before the first echoed text; echoed text ends with a newline.
 -- The first tick comes after one second, so fast calls print only the erase.
 liveOutput :: Handle -> Paint -> Live -> Complete -> Complete
 liveOutput h paint live complete sink req = do
-  ticker <- newMVar =<< if liveTicker live then Just <$> forkIO (tick 1) else pure Nothing
+  label <- newIORef ("waiting" :: Text)
+  ticker <- newMVar =<< if liveTicker live then Just <$> forkIO (tick label 1) else pure Nothing
   lastChar <- newIORef Nothing
   let stop = modifyMVar_ ticker $ \t -> Nothing <$ mapM_ (\tid -> killThread tid >> put "\r\ESC[K") t
       echo d = when (liveEcho live && not (T.null d)) $ do
@@ -91,13 +93,17 @@ liveOutput h paint live complete sink req = do
       finish = do
         stop
         readIORef lastChar >>= \c -> when (maybe False (/= '\n') c) (put "\n")
-  complete (\d -> echo d >> sink d) req `finally` finish
+      observe = \case
+        TextDelta d -> echo d
+        ReasoningDelta _ -> writeIORef label "thinking"
+  complete (\d -> observe d >> sink d) req `finally` finish
   where
     put t = TIO.hPutStr h t >> hFlush h
-    tick n = do
+    tick label n = do
       threadDelay 1000000
-      put ("\r" <> paint Dim ("[waiting " <> tshow (n :: Int) <> "s]"))
-      tick (n + 1)
+      l <- readIORef label
+      put ("\r" <> paint Dim ("[" <> l <> " " <> tshow (n :: Int) <> "s]"))
+      tick label (n + 1)
 
 -- | 'Partial' is printed without a newline; the next event completes it.
 data Line = Partial Text | Full Text
@@ -110,8 +116,9 @@ renderEvent paint = \case
   CallStarted c -> Partial (paint Cyan ("[" <> callName c <> "]") <> " " <> callSummary c <> " ")
   CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
   CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> elide 100 e))
+  CostUnknown -> Full (paint Red "[--max-cost has no effect: the provider reports no cost]")
   ContextTrimmed n chars ->
-    Full (paint Dim ("[context: elided " <> tshow n <> " old tool result" <> (if n == 1 then "" else "s") <> ", ~" <> tshow (chars `div` 4) <> " tokens]"))
+    Full (paint Dim ("[context: elided " <> tshow n <> " old tool message" <> (if n == 1 then "" else "s") <> ", ~" <> tshow (chars `div` 4) <> " tokens]"))
 
 -- | The argument that identifies the call (command or path), else the raw
 -- arguments; one line, at most 80 characters.

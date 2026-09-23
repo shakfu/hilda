@@ -124,7 +124,7 @@ data Attempt = Retry Text | Done (Either Text Reply)
 -- | POST with up to three retries, only where the server cannot have run
 -- the request: 429, and connection failures before it was sent. A 5xx or
 -- response timeout may follow a billed completion, so those fail at once.
-send :: H.Manager -> H.Request -> (Text -> IO ()) -> IO (Either Text Reply)
+send :: H.Manager -> H.Request -> (Delta -> IO ()) -> IO (Either Text Reply)
 send mgr req sink = go (0 :: Int)
   where
     retries = 3
@@ -145,14 +145,14 @@ send mgr req sink = go (0 :: Int)
 
 -- | Read one response. A server that ignores @stream@ answers with plain
 -- JSON; its text reaches the sink in one piece.
-receive :: (Text -> IO ()) -> H.Response H.BodyReader -> IO Attempt
+receive :: (Delta -> IO ()) -> H.Response H.BodyReader -> IO Attempt
 receive sink resp
   | retryableStatus code = Retry . httpError <$> consume
   | code < 200 || code >= 300 = Done . Left . httpError <$> consume
   | streaming = Done <$> readStream (H.responseBody resp) sink
   | otherwise = do
       r <- (\b -> first T.pack (eitherDecodeStrict b) >>= decodeReply) <$> consume
-      either (const (pure ())) (mapM_ sink . replyText) r
+      either (const (pure ())) (mapM_ (sink . TextDelta) . replyText) r
       pure (Done r)
   where
     code = statusCode (H.responseStatus resp)
@@ -165,7 +165,7 @@ streamIdleLimit :: Int
 streamIdleLimit = 300
 
 -- | Fold server-sent events into a reply, passing text deltas to the sink.
-readStream :: H.BodyReader -> (Text -> IO ()) -> IO (Either Text Reply)
+readStream :: H.BodyReader -> (Delta -> IO ()) -> IO (Either Text Reply)
 readStream body sink = loop BS.empty emptyPartial
   where
     loop buf p =
@@ -181,7 +181,7 @@ readStream body sink = loop BS.empty emptyPartial
     feed (d : ds) rest p =
       case first T.pack (eitherDecodeStrict d) >>= stepChunk p of
         Left e -> pure (Left e)
-        Right (p', delta) -> mapM_ sink delta >> feed ds rest p'
+        Right (p', deltas) -> mapM_ sink deltas >> feed ds rest p'
 
 retryableStatus :: Int -> Bool
 retryableStatus = (== 429)

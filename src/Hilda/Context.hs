@@ -1,8 +1,9 @@
 -- | Keeping the conversation within a token budget.
 --
--- Tool results make up most of a coding session's history and can be
--- fetched again, so they are elided oldest first. User and assistant text
--- is kept. Elision is written into the history rather than applied per
+-- Tool results and long tool-call arguments (file contents sent to
+-- @write@ or @edit@) make up most of a coding session's history and can be
+-- recovered from disk, so they are elided oldest first. User and assistant
+-- text is kept. Elision is written into the history rather than applied per
 -- request, so the sent prefix stays stable for provider prompt caching.
 module Hilda.Context
   ( historyTokens
@@ -10,9 +11,14 @@ module Hilda.Context
   , elidedStub
   ) where
 
+import Data.Aeson (Value (..), decodeStrict)
+import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.IntSet as IS
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text.Lazy as TL
 import Hilda.Types
 
 -- | Estimated tokens of a history as sent, at four characters per token.
@@ -28,14 +34,14 @@ historyTokens hist = (sum (map chars hist) + 3) `div` 4
 elidedStub :: Int -> Text
 elidedStub n = "[elided to fit the context budget: " <> T.pack (show n) <> " characters; run the tool again if needed]"
 
--- | Once over @budget@ tokens, elide the oldest tool results until the
+-- | Once over @budget@ tokens, elide the oldest tool results and long
+-- tool-call arguments until the
 -- history fits three quarters of it. Trimming past the budget makes trims
 -- rarer; each one changes an early message and invalidates the provider's
 -- prompt cache from there on.
 --
--- Results after the last assistant message, which the model has not seen,
--- are kept. Returns the history, the number of results elided and the
--- characters removed. A history that still does not fit is returned as is.
+-- The last assistant message and the results after it are kept. Returns
+-- the history, the number of messages elided and the characters removed. A history that still does not fit is returned as is.
 fitContext :: Int -> [Message] -> ([Message], Int, Int)
 fitContext budget hist
   | historyTokens hist <= budget || null chosen = (hist, 0, 0)
@@ -45,14 +51,13 @@ fitContext budget hist
     lastAssistant = maximum (-1 : [i | (i, Assistant {}) <- indexed])
     indexed = zip [0 :: Int ..] hist
     -- (index, characters saved), oldest first.
-    candidates =
-      [ (i, saved)
-      | (i, ToolResult _ t) <- indexed
-      , i < lastAssistant
-      , not (elidedPrefix `T.isPrefixOf` t)
-      , let saved = T.length t - T.length (elidedStub (T.length t))
-      , saved > 0
-      ]
+    candidates = [(i, saved) | (i, m) <- indexed, i < lastAssistant, let saved = savedBy m, saved > 0]
+    savedBy = \case
+      ToolResult _ t
+        | elidedPrefix `T.isPrefixOf` t -> 0
+        | otherwise -> T.length t - T.length (elidedStub (T.length t))
+      Assistant _ calls -> sum (map (snd . shrinkArgs . callArgs) calls)
+      _ -> 0
     chosen = cover 0 candidates
     cover _ [] = []
     cover acc (c@(_, saved) : cs)
@@ -61,5 +66,25 @@ fitContext budget hist
     picked = IS.fromList (map fst chosen)
     elide i = \case
       ToolResult cid t | i `IS.member` picked -> ToolResult cid (elidedStub (T.length t))
+      Assistant t calls | i `IS.member` picked -> Assistant t [c {callArgs = fst (shrinkArgs (callArgs c))} | c <- calls]
       m -> m
-    elidedPrefix = "[elided to fit the context budget"
+
+elidedPrefix :: Text
+elidedPrefix = "[elided to fit the context budget"
+
+-- | Tool-call arguments with every string over 300 characters replaced by
+-- a stub, re-encoded as JSON; and the characters saved. Arguments that
+-- are not a JSON object, or have nothing to shrink, are unchanged.
+shrinkArgs :: Text -> (Text, Int)
+shrinkArgs raw = case decodeStrict (encodeUtf8 raw) of
+  Just (Object o) | any long (KM.elems o) ->
+    let new = TL.toStrict (encodeToLazyText (Object (KM.map shrink o)))
+     in if T.length new < T.length raw then (new, T.length raw - T.length new) else (raw, 0)
+  _ -> (raw, 0)
+  where
+    long = \case
+      String s -> T.length s > 300 && not (elidedPrefix `T.isPrefixOf` s)
+      _ -> False
+    shrink v = case v of
+      String s | long v -> String (elidedPrefix <> ": " <> T.pack (show (T.length s)) <> " characters]")
+      _ -> v

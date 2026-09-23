@@ -125,10 +125,10 @@ spec = do
             \data: [DONE]\n\n"
       ((r, deltas), _) <- serve [Canned 200 "text/event-stream" events]
       r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 0 Nothing))
-      deltas `shouldBe` ["Hel", "lo"]
+      deltas `shouldBe` [TextDelta "Hel", TextDelta "lo"]
     it "passes a plain JSON reply to the sink in one piece" $ do
       ((_, deltas), _) <- serve [ok]
-      deltas `shouldBe` ["ok"]
+      deltas `shouldBe` [TextDelta "ok"]
 
   describe "parseKind" $
     it "round-trips every kind" $

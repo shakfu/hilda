@@ -9,7 +9,7 @@ module Hilda.Repl
 
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Hilda.Agent
@@ -106,6 +106,7 @@ interactive paint cfg = do
       case outStop out of
         Finished  -> pure ()
         TurnLimit -> say (paint Red "[stopped: turn limit reached]")
+        CostLimit -> say (paint Red "[stopped: cost limit reached]")
         Failed e  -> say (paint Red ("error: " <> e))
       let total = sesUsage s <> outUsage out
       when (outTurns out > 0) (liftIO (cfgRemember cfg (sesModel s)))
@@ -120,6 +121,8 @@ interactive paint cfg = do
         , envMode = sesMode s
         , envMaxTurns = cfgMaxTurns cfg
         , envBudget = cfgBudget cfg
+        , envCostLimit = cfgCostLimit cfg
+        , envSpent = fromMaybe 0 (usageCost (sesUsage s))
         , envHooks =
             Hooks
               { onEvent = \case

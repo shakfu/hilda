@@ -37,6 +37,8 @@ mkEnv complete mode answer =
     , envMode = mode
     , envMaxTurns = 10
     , envBudget = 1000000
+    , envCostLimit = Nothing
+    , envSpent = 0
     , envHooks = Hooks {onEvent = const (pure ()), confirm = const (pure answer)}
     }
 
@@ -105,6 +107,7 @@ spec = do
                 CallFinished _ _ -> record "finished"
                 Narration _ -> record "narration"
                 ContextTrimmed {} -> record "trimmed"
+                CostUnknown -> record "cost unknown"
             , confirm = \_ -> record "confirm" >> pure True
             }
     _ <- runTurn (mkEnv complete Ask True) {envHooks = hooks} [] "write it"
@@ -153,6 +156,33 @@ spec = do
       [r] -> map snd (toolResults (reqMessages r)) `shouldSatisfy` all ("[elided" `T.isPrefixOf`)
       rs -> expectationFailure (show (length rs))
     outContext out `shouldBe` 10
+
+  it "stops before the call that would pass the cost limit" $ do
+    let loopReply = reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])]
+    (complete, _) <- scripted (replicate 5 loopReply)
+    out <- runTurn (mkEnv complete Yolo True) {envCostLimit = Just 0.9} [] "go"
+    outStop out `shouldBe` CostLimit
+    outTurns out `shouldBe` 2
+    -- Every tool call has its result, so the history can continue.
+    last (outHistory out) `shouldSatisfy` \case
+      ToolResult {} -> True
+      _ -> False
+
+  it "counts cost spent before the turn" $ do
+    (complete, requests) <- scripted [reply (Just "ok") []]
+    out <- runTurn (mkEnv complete Yolo True) {envCostLimit = Just 1, envSpent = 1} [] "go"
+    outStop out `shouldBe` CostLimit
+    requests `shouldReturn` []
+
+  it "warns when a cost limit is set but no cost is reported" $ do
+    warned <- newIORef False
+    (complete, _) <- scripted [Reply (Just "ok") [] mempty]
+    let env = (mkEnv complete Yolo True) {envCostLimit = Just 1}
+        hooks = (envHooks env) {onEvent = \case
+          CostUnknown -> writeIORef warned True
+          _ -> pure ()}
+    _ <- runTurn env {envHooks = hooks} [] "go"
+    readIORef warned `shouldReturn` True
 
   it "stops with the provider's error" $ do
     (complete, _) <- scripted []

@@ -20,7 +20,7 @@ import Data.Aeson (Value (..), eitherDecodeStrict)
 import Data.Bifunctor (first)
 import Data.Foldable (find, traverse_)
 import Data.Functor ((<&>))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
@@ -34,6 +34,7 @@ data Event
   | CallStarted ToolCall
   | CallFinished ToolCall (Either Text Text)
   | ContextTrimmed Int Int -- ^ Tool results elided, characters removed.
+  | CostUnknown -- ^ A cost limit is set but the provider reports no cost.
 
 data Hooks m = Hooks
   { onEvent :: Event -> m ()
@@ -47,10 +48,12 @@ data Env m = Env
   , envMode     :: Mode
   , envMaxTurns :: Int
   , envBudget   :: Int -- ^ Context budget in estimated tokens.
+  , envCostLimit :: Maybe Double -- ^ Stop before a model call once spending reaches this.
+  , envSpent    :: Double -- ^ Cost already spent, e.g. earlier in a REPL session.
   , envHooks    :: Hooks m
   }
 
-data Stop = Finished | TurnLimit | Failed Text
+data Stop = Finished | TurnLimit | CostLimit | Failed Text
   deriving stock (Eq, Show)
 
 data Outcome = Outcome
@@ -69,12 +72,17 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
     specs = map toolSpec (visibleTools (envMode env) (envTools env))
     go n usage ctx unfitted
       | n >= envMaxTurns env = pure (Outcome unfitted "" n usage ctx TurnLimit)
+      -- Checked before a call, never between tool calls and their results,
+      -- so the history stays valid for the next prompt.
+      | spentAll usage = pure (Outcome unfitted "" n usage ctx CostLimit)
       | otherwise = do
           let (hist, elided, chars) = fitContext (envBudget env) unfitted
           when (elided > 0) (onEvent (envHooks env) (ContextTrimmed elided chars))
           liftIO (envComplete env (const (pure ())) (Request (envModel env) hist specs)) >>= \case
             Left err -> pure (Outcome hist "" n usage ctx (Failed err))
             Right (Reply text calls used) -> do
+              when (n == 0 && isJust (envCostLimit env) && isNothing (usageCost used)) $
+                onEvent (envHooks env) CostUnknown
               let hist' = hist <> [Assistant text calls]
                   usage' = usage <> used
                   -- Providers that report no usage get the estimate.
@@ -85,6 +93,9 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
                   traverse_ (onEvent (envHooks env) . Narration) text
                   results <- traverse (dispatch env) calls
                   go (n + 1) usage' ctx' (hist' <> results)
+    spentAll usage = case envCostLimit env of
+      Just limit -> envSpent env + fromMaybe 0 (usageCost usage) >= limit
+      Nothing -> False
 
 -- | Authorise and run one tool call. Every failure becomes a tool result
 -- the model can read, so the loop itself never fails on a tool.

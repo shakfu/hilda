@@ -57,6 +57,19 @@ spec = do
     let (_, n, _) = fitContext 2400 history
     n `shouldBe` 2
 
+  it "shrinks long arguments of old tool calls" $ do
+    let write = ToolCall "w" "write" ("{\"path\":\"a.txt\",\"content\":\"" <> big 4000 <> "\"}")
+        hist = [User "go", Assistant Nothing [write], ToolResult "w" "wrote", Assistant (Just "done") [], User "again", Assistant Nothing [call "r"], ToolResult "r" "x"]
+        (out, n, _) = fitContext 100 hist
+    n `shouldBe` 1
+    [callArgs c | Assistant _ cs <- take 2 out, c <- cs]
+      `shouldBe` ["{\"content\":\"[elided to fit the context budget: 4000 characters]\",\"path\":\"a.txt\"}"]
+
+  it "keeps the arguments of the last assistant message" $ do
+    let write = ToolCall "w" "write" ("{\"content\":\"" <> big 4000 <> "\"}")
+        hist = [User "go", Assistant Nothing [write], ToolResult "w" "wrote"]
+    fitContext 10 hist `shouldBe` (hist, 0, 0)
+
   it "is idempotent" $ do
     let (once, _, _) = fitContext 1 history
     fitContext 1 once `shouldBe` (once, 0, 0)

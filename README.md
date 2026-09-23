@@ -81,21 +81,23 @@ Usage lines show cached tokens, e.g. `12000 in (9000 cached) / 300 out`. `--json
 
 Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
 
-Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.
+Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. It reads `[thinking Ns]` while a reasoning model reasons; the reasoning itself is not printed. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.
 
-`--stream-json` prints `text_delta` lines as reply text streams, and `text`, `tool_call` and `tool_result` lines as they happen. Its last line is the `result` object that `--json` prints alone.
+`--stream-json` prints `text_delta` and `reasoning_delta` lines as the reply streams, and `text`, `tool_call` and `tool_result` lines as they happen. Its last line is the `result` object that `--json` prints alone.
 
 ## Context budget
 
-hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results are elided until it fits three quarters of the budget. Each elision changes an early message and invalidates the prompt cache from there on, so trimming in larger steps keeps it rare. Elided results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. hilda prints `[context: elided N old tool results]` when this happens.
+hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results and long tool-call arguments (such as file contents sent to `write`) are elided until it fits three quarters of the budget. Each elision changes an early message and invalidates the prompt cache from there on, so trimming in larger steps keeps it rare. Elided results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. Elided arguments become `[elided to fit the context budget: N characters]` inside otherwise valid JSON. hilda prints `[context: elided N old tool messages]` when this happens.
 
-- Results the model has not seen yet are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
+- The last assistant message and the results after it are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
 - Elision is written into the history, so the start of the conversation stays the same between calls and provider prompt caching keeps working.
 - Set the budget below your model's context window. Local models often have 8,000 to 32,000 tokens.
 
 The REPL footer and `/usage` show the context size: the prompt tokens of the last model call. `--json` output includes it as `context_tokens`.
 
-Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50).
+`--max-cost USD` stops before the next model call once spending reaches the limit: per prompt in headless runs, per session in the REPL. It needs a provider that reports cost, such as OpenRouter; otherwise hilda warns that the limit has no effect. A single call can pass the limit, since cost is known only after it.
+
+Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50), 3 stopped by `--max-cost`.
 
 ## Tools and modes
 

@@ -53,8 +53,8 @@ sseData buf = (payloads, rest)
       , "data:" `BS.isPrefixOf` l
       ]
 
--- | Fold one chunk into the reply; also return its text delta, if any.
-stepChunk :: Partial -> Value -> Either Text (Partial, Maybe Text)
+-- | Fold one chunk into the reply; also return its deltas.
+stepChunk :: Partial -> Value -> Either Text (Partial, [Delta])
 stepChunk p = first T.pack . parseEither (withObject "chunk" chunk)
   where
     chunk o =
@@ -68,14 +68,21 @@ stepChunk p = first T.pack . parseEither (withObject "chunk" chunk)
             [] -> pure KM.empty
           content <- delta .:? "content"
           calls <- traverse callDelta =<< (delta .:? "tool_calls" .!= [])
+          -- Models send reasoning as reasoning_details, a plain reasoning
+          -- string, or both; prefer the details to avoid counting it twice.
+          details <- delta .:? "reasoning_details" .!= []
+          plain <- delta .:? "reasoning"
           let text = content >>= \t -> if T.null t then Nothing else Just t
+              thought = case [t | Object d <- details, Just (String t) <- [KM.lookup "text" d]] of
+                [] -> plain
+                ts -> Just (T.concat ts)
           pure
             ( p
                 { partText = maybe id (:) text (partText p)
                 , partCalls = foldl' mergeCall (partCalls p) calls
                 , partUsage = fromMaybe (partUsage p) usage
                 }
-            , text
+            , [TextDelta t | Just t <- [text]] <> [ReasoningDelta t | Just t <- [thought], not (T.null t)]
             )
 
 data CallDelta = CallDelta (Maybe Int) (Maybe Text) (Maybe Text) (Maybe Text)

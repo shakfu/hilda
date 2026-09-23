@@ -8,6 +8,7 @@ module Hilda.Types
   , Usage (..)
   , Reply (..)
   , Request (..)
+  , Delta (..)
   , Complete
   ) where
 
@@ -62,10 +63,16 @@ data Request = Request
   }
   deriving stock (Eq, Show)
 
--- | A chat backend. It passes each piece of reply text to the sink as it
+-- | A piece of a streamed reply.
+data Delta
+  = TextDelta Text
+  | ReasoningDelta Text -- ^ Model reasoning, shown only as a status.
+  deriving stock (Eq, Show)
+
+-- | A chat backend. It passes each piece of the reply to the sink as it
 -- arrives. The agent loop depends only on this function type, so tests
--- substitute a scripted one and output modes wrap it to observe the text.
-type Complete = (Text -> IO ()) -> Request -> IO (Either Text Reply)
+-- substitute a scripted one and output modes wrap it to observe deltas.
+type Complete = (Delta -> IO ()) -> Request -> IO (Either Text Reply)
 
 instance ToJSON ToolCall where
   toJSON c =
