@@ -2,10 +2,12 @@
 -- session state is a value threaded through the input loop.
 module Hilda.Repl
   ( Command (..)
-  , parseCommand
+  , Input (..)
+  , parseInput
   , runRepl
   ) where
 
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
@@ -33,11 +35,17 @@ data Command
   | Unknown Text
   deriving stock (Eq, Show)
 
--- | 'Nothing' when the line is a prompt rather than a command.
-parseCommand :: Text -> Maybe Command
-parseCommand line = case T.words line of
-  (w : rest) | Just name <- T.stripPrefix "/" w -> Just (command name (listToMaybe rest))
-  _ -> Nothing
+data Input = Prompt Text | Run Command
+  deriving stock (Eq, Show)
+
+-- | A line starting with @/@ is a command; @//@ escapes a prompt that
+-- starts with @/@.
+parseInput :: Text -> Input
+parseInput line
+  | Just rest <- T.stripPrefix "//" line = Prompt ("/" <> rest)
+  | otherwise = case T.words line of
+      (w : rest) | Just name <- T.stripPrefix "/" w -> Run (command name (listToMaybe rest))
+      _ -> Prompt line
   where
     command name arg = case name of
       "help"   -> Help
@@ -86,10 +94,10 @@ interactive paint cfg = do
         Nothing -> pure s
         Just raw -> case T.strip (T.pack raw) of
           "" -> loop s
-          line -> case parseCommand line of
-            Just Quit -> pure s
-            Just cmd  -> run cmd s >>= loop
-            Nothing   -> turn s line >>= loop
+          line -> case parseInput line of
+            Run Quit    -> pure s
+            Run cmd     -> run cmd s >>= loop
+            Prompt text -> turn s text >>= loop
 
     -- Ctrl-C abandons the turn and keeps the history from before it.
     turn s line = handleInterrupt (say (paint Red "[interrupted]") >> pure s) . withInterrupt $ do
@@ -100,6 +108,7 @@ interactive paint cfg = do
         TurnLimit -> say (paint Red "[stopped: turn limit reached]")
         Failed e  -> say (paint Red ("error: " <> e))
       let total = sesUsage s <> outUsage out
+      when (outTurns out > 0) (liftIO (cfgRemember cfg (sesModel s)))
       say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> " | context: " <> tshow (outContext out) <> "]"))
       pure s {sesHistory = outHistory out, sesUsage = total, sesContext = outContext out}
 
@@ -132,9 +141,7 @@ interactive paint cfg = do
         Just mode -> s {sesMode = mode} <$ say ("mode: " <> modeName mode)
         Nothing -> s <$ say (paint Red "modes: yolo, ask, read-only")
       SetModel Nothing -> s <$ say ("model: " <> sesModel s)
-      SetModel (Just m) -> do
-        liftIO (cfgRemember cfg m)
-        s {sesModel = m} <$ say ("model: " <> m)
+      SetModel (Just m) -> s {sesModel = m} <$ say ("model: " <> m)
       ListTools ->
         s <$ mapM_ (\t -> say (toolName t <> " - " <> toolDescription t)) (visibleTools (sesMode s) builtinTools)
       ShowSystem -> s <$ say (cfgSystem cfg)
@@ -155,4 +162,5 @@ helpText =
   , "/usage                      tokens and cost for this session"
   , "/clear                      start a new conversation"
   , "/quit                       exit (or Ctrl-D)"
+  , "//text                      send a prompt that starts with /"
   ]

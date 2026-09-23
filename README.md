@@ -49,7 +49,7 @@ make install   # copies a stripped hilda to ~/.local/bin (override: BINDIR=...)
 
 `--base-url` and `--api-key-env VAR` override either. The `openai` provider covers local servers such as Ollama or llama.cpp; they usually need no key.
 
-Pass `-m NAME` once per provider. hilda saves the last model used with each provider in `$XDG_STATE_HOME/hilda/models.json` (default `~/.local/state/hilda/`) and reuses it when `-m` is absent. REPL `/model` changes are saved too.
+Pass `-m NAME` once per provider. hilda saves the last model used with each provider in `$XDG_STATE_HOME/hilda/models.json` (default `~/.local/state/hilda/`) and reuses it when `-m` is absent. A model is saved only after it answers, so a mistyped `-m` is not remembered. REPL `/model` changes are saved the same way.
 
 ## Usage
 
@@ -102,6 +102,8 @@ Tools:
 
 Other tool output over 30,000 characters keeps its head and tail.
 
+**Warning:** `yolo`, the default, runs every command the model asks for with your user's permissions. A model can delete files, rewrite your dotfiles or send data over the network. Use `-M ask` or `-M read-only` with untrusted prompts or models, or run hilda as an unprivileged user or in a container.
+
 | `-M`, `--mode` | read | write, edit, bash |
 |-|-|-|
 | `yolo` (default) | run | run |
@@ -128,4 +130,4 @@ Options:
 
 ## REPL commands
 
-`/mode`, `/model`, `/tools`, `/system`, `/usage` (tokens and cost), `/clear`, `/quit`. Ctrl-C cancels the current turn. Ctrl-D exits.
+`/mode`, `/model`, `/tools`, `/system`, `/usage` (tokens and cost), `/clear`, `/quit`. Start a line with `//` to send a prompt that begins with `/`. Ctrl-C cancels the current turn. Ctrl-D exits.

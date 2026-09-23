@@ -10,6 +10,7 @@ module Hilda.App
   , exitCodeFor
   ) where
 
+import Control.Monad (when)
 import Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Text (Text)
@@ -34,7 +35,7 @@ data Config = Config
   , cfgSystem   :: Text
   , cfgMaxTurns :: Int
   , cfgBudget   :: Int -- ^ Context budget in estimated tokens.
-  , cfgRemember :: Text -> IO () -- ^ Record the model for the next run.
+  , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
   }
 
 -- | Shown by @--version@ and at REPL start.
@@ -58,6 +59,7 @@ runHeadless cfg output prompt = do
         StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
         _ -> cfgComplete cfg
   out <- runTurn (env complete (emit paint)) [System (cfgSystem cfg)] prompt
+  when (outTurns out > 0) (cfgRemember cfg (cfgModel cfg))
   case output of
     Text -> do
       case outStop out of

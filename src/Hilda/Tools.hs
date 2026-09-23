@@ -22,7 +22,8 @@ module Hilda.Tools
 
 import Control.Concurrent (forkFinally)
 import Control.Concurrent.MVar
-import Control.Exception (evaluate, onException, throwIO)
+import Control.Exception (IOException, evaluate, onException, throwIO, try)
+import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as BS
@@ -184,7 +185,11 @@ runShell secs cmd = do
           , create_group = True
           }
   withCreateProcess cp $ \_ _ _ ph -> do
-    let kill = getPid ph >>= mapM_ (signalProcessGroup sigKILL)
+    -- Kill the group, then reap bash here rather than leave it to
+    -- withCreateProcess's background cleanup.
+    let kill = do
+          getPid ph >>= mapM_ (signalProcessGroup sigKILL)
+          void (try @IOException (waitForProcess ph))
     done <- newEmptyMVar
     -- The reader closes its own end: closing it here could block on the
     -- handle lock while the reader waits for an EOF that never comes.

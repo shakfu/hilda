@@ -6,11 +6,13 @@ import Test.Hspec
 spec :: Spec
 spec = do
   it "treats plain text as a prompt" $
-    parseCommand "fix the build" `shouldBe` Nothing
+    parseInput "fix the build" `shouldBe` Prompt "fix the build"
   it "parses commands and their argument" $ do
-    parseCommand "/mode ask" `shouldBe` Just (SetMode (Just "ask"))
-    parseCommand "/mode" `shouldBe` Just (SetMode Nothing)
-    parseCommand "/model gpt-x" `shouldBe` Just (SetModel (Just "gpt-x"))
-    parseCommand "/exit" `shouldBe` Just Quit
+    parseInput "/mode ask" `shouldBe` Run (SetMode (Just "ask"))
+    parseInput "/mode" `shouldBe` Run (SetMode Nothing)
+    parseInput "/model gpt-x" `shouldBe` Run (SetModel (Just "gpt-x"))
+    parseInput "/exit" `shouldBe` Run Quit
   it "flags unknown commands" $
-    parseCommand "/frob" `shouldBe` Just (Unknown "frob")
+    parseInput "/frob" `shouldBe` Run (Unknown "frob")
+  it "sends // as a prompt starting with /" $
+    parseInput "//etc/hosts is wrong" `shouldBe` Prompt "/etc/hosts is wrong"

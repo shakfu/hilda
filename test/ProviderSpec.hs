@@ -5,6 +5,8 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Either (isLeft)
 import qualified Data.Text as T
+import Data.IORef (modifyIORef, newIORef, readIORef)
+import FakeServer
 import Hilda.Provider
 import Hilda.Types
 import qualified Network.HTTP.Client as H
@@ -75,6 +77,47 @@ spec = do
     it "retries connection failures but not response timeouts" $ do
       retryableError (H.HttpExceptionRequest H.defaultRequest H.ConnectionTimeout) `shouldBe` True
       retryableError (H.HttpExceptionRequest H.defaultRequest H.ResponseTimeout) `shouldBe` False
+
+  describe "send" $ do
+    let ok = json 200 "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"
+        call port = do
+          Right complete <- newComplete (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing)
+          seen <- newIORef []
+          r <- complete (\d -> modifyIORef seen (d :)) (Request "m" [User "hi"] [])
+          (,) r . reverse <$> readIORef seen
+        serve responses = do
+          port <- freePort
+          withServer port 0 responses (call port)
+    it "retries a 429 and then succeeds" $ do
+      ((r, _), n) <- serve [json 429 "{}", ok]
+      fmap replyText r `shouldBe` Right (Just "ok")
+      n `shouldBe` 2
+    it "does not retry a 500" $ do
+      ((r, _), n) <- serve [json 500 "boom", ok]
+      r `shouldBe` Left "HTTP 500: boom"
+      n `shouldBe` 1
+    it "does not retry a 400" $ do
+      ((r, _), n) <- serve [json 400 "bad", ok]
+      r `shouldSatisfy` either (T.isPrefixOf "HTTP 400") (const False)
+      n `shouldBe` 1
+    it "retries a refused connection until the server is up" $ do
+      port <- freePort
+      ((r, _), n) <- withServer port 300000 [ok] (call port)
+      fmap replyText r `shouldBe` Right (Just "ok")
+      n `shouldBe` 1
+    it "streams server-sent events to the sink" $ do
+      let events =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n\
+            \: keep-alive\n\n\
+            \data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
+            \data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n\
+            \data: [DONE]\n\n"
+      ((r, deltas), _) <- serve [Canned 200 "text/event-stream" events]
+      r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 Nothing))
+      deltas `shouldBe` ["Hel", "lo"]
+    it "passes a plain JSON reply to the sink in one piece" $ do
+      ((_, deltas), _) <- serve [ok]
+      deltas `shouldBe` ["ok"]
 
   describe "parseKind" $
     it "round-trips every kind" $

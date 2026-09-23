@@ -164,7 +164,6 @@ main = do
   (provider, model) <-
     either die' pure (resolveProvider (`lookup` env) (\k -> Map.lookup (kindName k) models) o)
   let remember = rememberModel statePath (providerKind provider)
-  remember model
   complete <- newComplete provider >>= either die' pure
   system <- systemPrompt o
   let cfg =
