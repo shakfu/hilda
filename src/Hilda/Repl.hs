@@ -66,7 +66,7 @@ runRepl cfg = do
   -- cursor arithmetic.
   paint <- (\on -> if on then ansi else plain) <$> colorEnabled stdout
   runInputT defaultSettings {historyFile = Just (dir </> "history")} $ do
-    say versionText
+    say (paint BoldMagenta versionText)
     say (paint Dim ("model " <> cfgModel cfg <> ", mode " <> modeName (cfgMode cfg) <> ". /help for commands, Ctrl-D to exit."))
     final <- loop paint (Session (cfgMode cfg) (cfgModel cfg) fresh mempty)
     say (paint Dim ("session: " <> renderUsage (sesUsage final)))

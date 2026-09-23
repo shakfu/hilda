@@ -3,6 +3,7 @@ module StateSpec (spec) where
 import qualified Data.Map.Strict as Map
 import Hilda.Provider (ProviderKind (..))
 import Hilda.State
+import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -23,3 +24,4 @@ spec = do
     rememberModel path OpenAICompatible "local"
     rememberModel path OpenRouter "b/two"
     loadModels path `shouldReturn` Map.fromList [("openrouter", "b/two"), ("openai", "local")]
+    listDirectory (dir </> "sub") `shouldReturn` ["models.json"]

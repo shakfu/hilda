@@ -80,7 +80,14 @@ Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50).
 
 ## Tools and modes
 
-Tools: `read`, `write`, `edit` (exact, unique string replacement), `bash` (`bash -c`, default timeout 120 s, whole process group killed on timeout).
+Tools:
+
+- `read`: streams the file. Output stops at the line limit or about 30,000 characters and names the `offset` to continue from.
+- `write`: writes through an exclusively created temporary file, then renames it into place.
+- `edit`: exact, unique string replacement. Files over 10 MiB are refused.
+- `bash`: `bash -c`, default timeout 120 s. The whole process group is killed on timeout.
+
+Other tool output over 30,000 characters keeps its head and tail.
 
 | `-M`, `--mode` | read | write, edit, bash |
 |-|-|-|
@@ -90,7 +97,15 @@ Tools: `read`, `write`, `edit` (exact, unique string replacement), `bash` (`bash
 
 ## System prompt
 
-- `--system TEXT` or `--system-file PATH` replaces the base prompt.
+The system prompt is assembled in this order:
+
+1. hilda's default instructions, or the text of `--system TEXT` or
+   `--system-file PATH`, which replace them.
+2. `--append-system TEXT` or the text of `--append-system-file PATH`, if given.
+3. `Working directory: <cwd>`, always.
+4. AGENTS.md files.
+
+Options:
 
 - `AGENTS.md` files load from the git root down to the working directory, outermost first. Without a git root, only the working directory is read.
 

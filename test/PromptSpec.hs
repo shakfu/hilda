@@ -1,6 +1,5 @@
 module PromptSpec (spec) where
 
-import qualified Data.Text as T
 import Hilda.Prompt
 import System.Directory (createDirectory, createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -25,8 +24,9 @@ spec = do
       writeFile (cwd </> "AGENTS.md") "used"
       discoverAgents cwd `shouldReturn` [cwd </> "AGENTS.md"]
 
-  describe "assemble" $
-    it "orders base prompt, working directory, then AGENTS.md files" $ do
-      let out = assemble "BASE\n" "/w" [("/w/AGENTS.md", "rules\n")]
-      out `shouldBe` "BASE\n\nWorking directory: /w\n\nInstructions from /w/AGENTS.md:\n\nrules"
-      T.lines out `shouldSatisfy` (not . null)
+  describe "assemble" $ do
+    it "orders instructions, working directory, then AGENTS.md files" $
+      assemble ["BASE\n", "EXTRA"] "/w" [("/w/AGENTS.md", "rules\n")]
+        `shouldBe` "BASE\n\nEXTRA\n\nWorking directory: /w\n\nInstructions from /w/AGENTS.md:\n\nrules"
+    it "drops blank instruction blocks" $
+      assemble ["BASE", "  "] "/w" [] `shouldBe` "BASE\n\nWorking directory: /w"

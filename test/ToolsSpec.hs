@@ -28,10 +28,18 @@ spec = do
       applyEdit "a" "a" False "abc" `shouldBe` Left "old_string and new_string are identical"
 
   describe "numberLines" $ do
-    it "numbers from the offset and applies the limit" $
-      numberLines 2 2 "a\nb\nc\nd\n" `shouldBe` "2\tb\n3\tc\n"
-    it "reports an empty range" $
-      numberLines 9 5 "a\nb\n" `shouldBe` "(no lines in range; file has 2 lines)"
+    let ls = ["a", "b", "c", "d"]
+    it "numbers from the offset and names where to continue" $
+      numberLines 1000 2 2 ls `shouldBe` "2\tb\n3\tc\n[more lines follow; continue with offset=4]\n"
+    it "adds no continuation at the end of the file" $
+      numberLines 1000 3 10 ls `shouldBe` "3\tc\n4\td\n"
+    it "stops at the character budget" $
+      numberLines 8 1 10 ls `shouldBe` "1\ta\n2\tb\n[more lines follow; continue with offset=3]\n"
+    it "cuts a single line longer than the budget" $
+      numberLines 5 1 10 ["abcdefgh", "x"]
+        `shouldBe` "1\tabc\n[line 1 cut to 5 characters]\n[more lines follow; continue with offset=2]\n"
+    it "reports an offset past the end" $
+      numberLines 1000 9 5 ls `shouldBe` "(no lines at offset 9; the file is shorter)"
 
   describe "truncateMiddle" $ do
     it "keeps short text" $ truncateMiddle 10 "abc" `shouldBe` "abc"
@@ -66,6 +74,36 @@ spec = do
       pathIsSymbolicLink link `shouldReturn` True
       readFile real `shouldReturn` "echo b"
       executable <$> getPermissions real `shouldReturn` True
+
+    it "pages a large file under the result limit" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "big.txt"
+      writeFile path (unlines (replicate 100000 (replicate 50 'x')))
+      Right out <- toolRun readTool (object ["path" .= path])
+      T.length out `shouldSatisfy` (< resultLimit)
+      out `shouldSatisfy` T.isInfixOf "continue with offset="
+
+    it "refuses to edit files over the size limit" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "huge.txt"
+      writeFile path (replicate (editLimit + 1) 'a')
+      r <- toolRun editTool (object ["path" .= path, "old_string" .= ("a" :: String), "new_string" .= ("b" :: String), "replace_all" .= True])
+      r `shouldSatisfy` either (T.isInfixOf "use bash") (const False)
+
+    it "writes through a fresh temporary file" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "f.txt"
+          victim = dir </> "victim.txt"
+      writeFile victim "safe"
+      -- The old fixed temporary name, planted as a symlink.
+      createFileLink victim (path <> ".hilda-tmp")
+      atomicWrite path "new"
+      readFile path `shouldReturn` "new"
+      readFile victim `shouldReturn` "safe"
+      listDirectory dir >>= (`shouldMatchList` ["f.txt", "f.txt.hilda-tmp", "victim.txt"])
+
+    it "gives new files default permissions" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "new.txt"
+      atomicWrite path "x"
+      p <- getPermissions path
+      (readable p, writable p, executable p) `shouldBe` (True, True, False)
 
     it "refuses to read binary files" $ withSystemTempDirectory "hilda" $ \dir -> do
       let path = dir </> "bin"

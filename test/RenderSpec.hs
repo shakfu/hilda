@@ -16,8 +16,9 @@ spec = do
       renderEvent plain (CallFinished bash (Right (T.replicate 40 "x"))) `shouldBe` Full "-> ~10 tokens"
     it "finishes the line with the error" $
       renderEvent plain (CallFinished bash (Left "boom")) `shouldBe` Full "-> error: boom"
-    it "wraps colored text in ANSI codes" $
+    it "wraps colored text in ANSI codes" $ do
       ansi Red "x" `shouldBe` "\ESC[31mx\ESC[0m"
+      ansi BoldMagenta "x" `shouldBe` "\ESC[1;35mx\ESC[0m"
 
   describe "callSummary" $ do
     it "uses the path for file tools" $

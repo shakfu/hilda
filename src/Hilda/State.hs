@@ -14,8 +14,9 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Hilda.Provider (ProviderKind, kindName)
-import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
-import System.FilePath (takeDirectory, (</>))
+import Hilda.Tools (atomicWrite)
+import System.Directory (XdgDirectory (..), getXdgDirectory)
+import System.FilePath ((</>))
 
 stateFile :: IO FilePath
 stateFile = (</> "models.json") <$> getXdgDirectory XdgState "hilda"
@@ -30,5 +31,4 @@ loadModels path =
 rememberModel :: FilePath -> ProviderKind -> Text -> IO ()
 rememberModel path kind model = do
   models <- loadModels path
-  createDirectoryIfMissing True (takeDirectory path)
-  BL.writeFile path (encode (Map.insert (kindName kind) model models))
+  atomicWrite path (BL.toStrict (encode (Map.insert (kindName kind) model models)))

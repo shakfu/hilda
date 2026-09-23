@@ -57,10 +57,6 @@ data Outcome = Outcome
   , outStop    :: Stop
   }
 
--- | Characters of tool output sent back to the model per call.
-resultLimit :: Int
-resultLimit = 30000
-
 -- | Append a user prompt to the history and run until the model stops.
 runTurn :: MonadIO m => Env m -> [Message] -> Text -> m Outcome
 runTurn env history prompt = go 0 mempty (history <> [User prompt])

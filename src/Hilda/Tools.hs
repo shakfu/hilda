@@ -11,6 +11,9 @@ module Hilda.Tools
   , writeTool
   , editTool
   , bashTool
+  , atomicWrite
+  , resultLimit
+  , editLimit
     -- * Pure helpers
   , numberLines
   , applyEdit
@@ -19,16 +22,18 @@ module Hilda.Tools
 
 import Control.Concurrent (forkFinally)
 import Control.Concurrent.MVar
-import Control.Exception (onException, throwIO)
+import Control.Exception (evaluate, onException, throwIO)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
 import System.Directory
 import System.Exit (ExitCode (..))
-import System.FilePath (takeDirectory)
+import System.FilePath (takeDirectory, takeFileName)
 import System.IO
 import System.Posix.Signals (signalProcessGroup, sigKILL)
 import System.Process
@@ -76,7 +81,9 @@ readTool :: Tool
 readTool =
   Tool
     { toolName = "read"
-    , toolDescription = "Read a UTF-8 text file. Returns lines prefixed with their line number."
+    , toolDescription =
+        "Read a UTF-8 text file. Returns lines prefixed with their line number. "
+          <> "Long output ends with the offset to continue from."
     , toolParams =
         schema
           [ ("path", "string", "File path")
@@ -86,12 +93,16 @@ readTool =
           ["path"]
     , toolEffect = Observe
     , toolRun = withArgs (\o -> (,,) <$> o .: "path" <*> o .:? "offset" .!= 1 <*> o .:? "limit" .!= 2000) $
-        \(path, offset, limit) -> do
-          bytes <- BS.readFile path
-          pure $
-            if BS.elem 0 bytes
-              then Left (T.pack path <> " looks binary (contains NUL bytes)")
-              else Right (numberLines offset limit (decodeUtf8Lenient bytes))
+        \(path, offset, limit) ->
+          -- Lazy read, forced inside the bracket: memory grows with the
+          -- lines returned, not the file size.
+          withBinaryFile path ReadMode $ \h -> do
+            bytes <- BL.hGetContents h
+            if BL.elem 0 (BL.take 8192 bytes)
+              then pure (Left (T.pack path <> " looks binary (NUL byte in the first 8 KiB)"))
+              else do
+                let out = numberLines readBudget offset limit (map (decodeUtf8Lenient . BL.toStrict) (BL8.lines bytes))
+                Right out <$ evaluate (T.length out)
     }
 
 writeTool :: Tool
@@ -126,12 +137,16 @@ editTool =
         withArgs
           (\o -> (,,,) <$> o .: "path" <*> o .: "old_string" <*> o .: "new_string" <*> o .:? "replace_all" .!= False)
           $ \(path, old, new, replaceAll) -> do
-            src <- decodeUtf8Lenient <$> BS.readFile path
-            case applyEdit old new replaceAll src of
-              Left err -> pure (Left err)
-              Right out -> do
-                atomicWrite path (encodeUtf8 out)
-                pure (Right ("edited " <> T.pack path))
+            size <- getFileSize path
+            if size > fromIntegral editLimit
+              then pure (Left (T.pack path <> " has " <> tshow size <> " bytes; edit is limited to " <> tshow editLimit <> ", use bash"))
+              else do
+                src <- decodeUtf8Lenient <$> BS.readFile path
+                case applyEdit old new replaceAll src of
+                  Left err -> pure (Left err)
+                  Right out -> do
+                    atomicWrite path (encodeUtf8 out)
+                    pure (Right ("edited " <> T.pack path))
     }
 
 bashTool :: Tool
@@ -200,25 +215,57 @@ readCapped limit h = go 0 []
 
 -- | Write via a temporary file and rename, so a crash never leaves a
 -- truncated file. Resolves symlinks first and keeps existing permissions.
+-- The temporary file is created exclusively under a unique name, so a
+-- symlink or a concurrent writer cannot redirect it.
 atomicWrite :: FilePath -> BS.ByteString -> IO ()
 atomicWrite path bytes = do
   target <- canonicalizePath path
-  createDirectoryIfMissing True (takeDirectory target)
+  let dir = takeDirectory target
+  createDirectoryIfMissing True dir
   existed <- doesFileExist target
   perms <- if existed then Just <$> getPermissions target else pure Nothing
-  let tmp = target <> ".hilda-tmp"
-  BS.writeFile tmp bytes
-  mapM_ (setPermissions tmp) perms
-  renameFile tmp target
+  (tmp, h) <- openBinaryTempFileWithDefaultPermissions dir (takeFileName target <> ".hilda-tmp")
+  flip onException (hClose h >> removeFile tmp) $ do
+    BS.hPut h bytes
+    hClose h
+    mapM_ (setPermissions tmp) perms
+    renameFile tmp target
 
--- | Number lines from @offset@ (1-based), returning at most @limit@ lines.
-numberLines :: Int -> Int -> Text -> Text
-numberLines offset limit src
-  | null picked = "(no lines in range; file has " <> tshow (length ls) <> " lines)"
-  | otherwise = T.unlines [tshow n <> "\t" <> l | (n, l) <- picked]
+-- | Characters of tool output sent back to the model per call.
+resultLimit :: Int
+resultLimit = 30000
+
+-- | Largest file @edit@ loads, in bytes.
+editLimit :: Int
+editLimit = 10 * 1024 * 1024
+
+-- | Room for @read@ output, below 'resultLimit' so the agent never cuts it.
+readBudget :: Int
+readBudget = resultLimit - 200
+
+-- | Number lines from @offset@ (1-based). Stops after @limit@ lines or
+-- @budget@ characters and names the offset to continue from.
+numberLines :: Int -> Int -> Int -> [Text] -> Text
+numberLines budget offset limit ls =
+  case drop (start - 1) (zip [1 :: Int ..] ls) of
+    [] -> "(no lines at offset " <> tshow start <> "; the file is shorter)"
+    rest -> T.unlines (go 0 budget rest)
   where
-    ls = T.lines src
-    picked = take (max 0 limit) (drop (max 0 (offset - 1)) (zip [1 :: Int ..] ls))
+    start = max 1 offset
+    go _ _ [] = []
+    go n room ((i, l) : more)
+      | n >= limit = [continueAt i]
+      | cost <= room = numbered : go (n + 1) (room - cost) more
+      | n > 0 = [continueAt i]
+      | otherwise =
+          -- A single line longer than the budget: return its start.
+          T.take room numbered
+            : ("[line " <> tshow i <> " cut to " <> tshow room <> " characters]")
+            : [continueAt (i + 1) | not (null more)]
+      where
+        numbered = tshow i <> "\t" <> l
+        cost = T.length numbered + 1
+    continueAt i = "[more lines follow; continue with offset=" <> tshow i <> "]"
 
 -- | Replace @old@ with @new@. Refuses ambiguous matches unless @replaceAll@.
 applyEdit :: Text -> Text -> Bool -> Text -> Either Text Text

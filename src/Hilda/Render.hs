@@ -29,7 +29,7 @@ import System.Environment (lookupEnv)
 import System.IO (Handle, hIsTerminalDevice)
 import Text.Printf (printf)
 
-data Color = Dim | Red | Cyan
+data Color = Dim | Red | Cyan | BoldMagenta
   deriving stock (Eq, Show)
 
 type Paint = Color -> Text -> Text
@@ -41,6 +41,7 @@ ansi c t = "\ESC[" <> code c <> "m" <> t <> "\ESC[0m"
       Dim  -> "2"
       Red  -> "31"
       Cyan -> "36"
+      BoldMagenta -> "1;35"
 
 plain :: Paint
 plain _ t = t

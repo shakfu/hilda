@@ -12,9 +12,9 @@ First release.
 
 - Providers: `openai` (any OpenAI-compatible server) and `openrouter`. OpenRouter is the default when `OPENROUTER_API_KEY` is set. Select with `-P`/`--provider`. Requests retry up to 3 times on 429, 5xx and transport errors.
 
-- The last model per provider is saved to `$XDG_STATE_HOME/hilda/models.json`, so `-m` is needed once.
+- The last model per provider is saved atomically to `$XDG_STATE_HOME/hilda/models.json`, so `-m` is needed once.
 
-- Tools: `read`, `write`, `edit`, `bash`. Writes are atomic and keep symlinks and permissions. `bash` kills its whole process group on timeout and captures at most 1 MiB of output.
+- Tools: `read`, `write`, `edit`, `bash`. `read` streams files and pages long output with a continuation offset. Writes are atomic via an exclusively created temporary file, and keep symlinks and permissions. `edit` refuses files over 10 MiB. `bash` kills its whole process group on timeout and captures at most 1 MiB of output.
 
 - Permission modes via `-M`/`--mode`: `yolo` (default), `ask`, `read-only`.
 
@@ -26,7 +26,7 @@ First release.
 
 - Token and cost totals per turn and per session. Cost comes from OpenRouter's `usage.cost`.
 
-- System prompt from `--system` or `--system-file`, plus `AGENTS.md` files from the git root down to the working directory. `--agents` and `--no-agents` override discovery.
+- System prompt from `--system` or `--system-file`, extended by `--append-system` or `--append-system-file`, plus `AGENTS.md` files from the git root down to the working directory. `--agents` and `--no-agents` override discovery.
 
 - `-V`/`--version`.
 

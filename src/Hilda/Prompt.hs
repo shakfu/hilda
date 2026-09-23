@@ -1,5 +1,5 @@
--- | System prompt assembly: a base prompt, the working-directory context
--- and any AGENTS.md files, in that order.
+-- | System prompt assembly: hilda's instructions, the working-directory
+-- context and any AGENTS.md files, in that order.
 module Hilda.Prompt
   ( defaultSystemPrompt
   , assemble
@@ -24,12 +24,14 @@ defaultSystemPrompt =
     , "Keep replies short. When the task is done, summarise what changed."
     ]
 
--- | Combine the base prompt, the working directory and AGENTS.md files
--- (given as path and content, outermost first).
-assemble :: Text -> FilePath -> [(FilePath, Text)] -> Text
-assemble base cwd agents =
+-- | Combine instruction blocks (default or @--system@, then
+-- @--append-system@), the working directory and AGENTS.md files (given as
+-- path and content, outermost first). Blank blocks are dropped.
+assemble :: [Text] -> FilePath -> [(FilePath, Text)] -> Text
+assemble instructions cwd agents =
   T.intercalate "\n\n" $
-    [T.strip base, "Working directory: " <> T.pack cwd]
+    filter (not . T.null) (map T.strip instructions)
+      <> ["Working directory: " <> T.pack cwd]
       <> [ "Instructions from " <> T.pack path <> ":\n\n" <> T.strip body
          | (path, body) <- agents
          ]

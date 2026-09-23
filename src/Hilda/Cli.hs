@@ -11,7 +11,7 @@ module Hilda.Cli
 import Control.Monad (mfilter, when)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -47,6 +47,7 @@ data Options = Options
   , optKeyEnv   :: Maybe String
   , optMode     :: Mode
   , optSystem   :: Maybe SystemSource
+  , optAppend   :: Maybe SystemSource
   , optAgents   :: AgentsSource
   , optMaxTurns :: Int
   }
@@ -88,8 +89,12 @@ options =
           <> help "Permission mode. yolo: run all tools (default). ask: confirm write, edit and bash. read-only: offer only read."
       )
     <*> optional
-      ( SystemText <$> strOption (long "system" <> metavar "TEXT" <> help "Replace the base system prompt (AGENTS.md still loads)")
-          <|> SystemFile <$> strOption (long "system-file" <> metavar "PATH" <> help "Replace the base system prompt with a file (AGENTS.md still loads)")
+      ( SystemText <$> strOption (long "system" <> metavar "TEXT" <> help "Replace hilda's default instructions (AGENTS.md still loads)")
+          <|> SystemFile <$> strOption (long "system-file" <> metavar "PATH" <> help "Replace hilda's default instructions with a file (AGENTS.md still loads)")
+      )
+    <*> optional
+      ( SystemText <$> strOption (long "append-system" <> metavar "TEXT" <> help "Add instructions after hilda's default ones (or after --system)")
+          <|> SystemFile <$> strOption (long "append-system-file" <> metavar "PATH" <> help "Add instructions from a file after hilda's default ones (or after --system)")
       )
     <*> ( flag' NoAgents (long "no-agents" <> help "Do not load AGENTS.md")
             <|> Explicit <$> some (strOption (long "agents" <> metavar "PATH" <> help "Load this AGENTS.md instead of discovering one (repeatable)"))
@@ -128,16 +133,18 @@ resolveProvider env remembered o = do
 
 systemPrompt :: Options -> IO Text
 systemPrompt o = do
-  base <- case optSystem o of
-    Nothing             -> pure defaultSystemPrompt
-    Just (SystemText t) -> pure t
-    Just (SystemFile f) -> readUtf8 f
+  instructions <- maybe (pure defaultSystemPrompt) readSource (optSystem o)
+  extra <- traverse readSource (optAppend o)
   cwd <- getCurrentDirectory
   paths <- case optAgents o of
     Discover    -> discoverAgents cwd
     Explicit ps -> pure ps
     NoAgents    -> pure []
-  assemble base cwd <$> loadAgents paths
+  assemble (instructions : maybeToList extra) cwd <$> loadAgents paths
+  where
+    readSource = \case
+      SystemText t -> pure t
+      SystemFile f -> readUtf8 f
 
 readUtf8 :: FilePath -> IO Text
 readUtf8 f = decodeUtf8Lenient <$> BS.readFile f

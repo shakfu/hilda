@@ -30,6 +30,14 @@ spec = do
       fmap optOutput o `shouldBe` Just Json
       fmap optMode o `shouldBe` Just ReadOnly
       fmap optSystem o `shouldBe` Just (Just (SystemText "be brief"))
+    it "parses --append-system alongside --system" $ do
+      let o = parse ["--system", "base", "--append-system", "more"]
+      fmap optSystem o `shouldBe` Just (Just (SystemText "base"))
+      fmap optAppend o `shouldBe` Just (Just (SystemText "more"))
+    it "parses --append-system-file" $
+      fmap optAppend (parse ["--append-system-file", "extra.md"]) `shouldBe` Just (Just (SystemFile "extra.md"))
+    it "rejects --append-system with --append-system-file" $
+      parse ["--append-system", "x", "--append-system-file", "y"] `shouldBe` Nothing
     it "parses --stream-json" $
       fmap optOutput (parse ["-p", "hi", "--stream-json"]) `shouldBe` Just StreamJson
     it "rejects --json with --stream-json" $
