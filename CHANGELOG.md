@@ -22,7 +22,7 @@ First release.
 
 - REPL with history, slash commands (`/mode`, `/model`, `/tools`, `/system`, `/usage`, `/clear`, `/quit`) and Ctrl-C to cancel a turn.
 
-- One line per tool call with an estimated result size in tokens. ANSI color on terminals, disabled by `NO_COLOR`.
+- One line per tool call with an estimated result size in tokens. ANSI color on terminals, disabled by `NO_COLOR`. A `[waiting Ns]` line counts up during model calls.
 
 - Token and cost totals per turn and per session. Cost comes from OpenRouter's `usage.cost`.
 

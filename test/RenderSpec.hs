@@ -1,9 +1,12 @@
 module RenderSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import qualified Data.Text as T
 import Hilda.Agent (Event (..))
 import Hilda.Render
 import Hilda.Types
+import System.IO (hClose)
+import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 
 spec :: Spec
@@ -45,6 +48,17 @@ spec = do
         `shouldBe` "  path: a.txt\n  content: <3 characters>"
     it "shows unparseable arguments verbatim" $
       confirmDetail (ToolCall "c" "bash" "{oops") `shouldBe` "  arguments: {oops"
+
+  describe "withStatus" $ do
+    it "erases the line after a fast action" $ withSystemTempFile "status" $ \path h -> do
+      r <- withStatus h plain (pure 'x')
+      hClose h
+      r `shouldBe` 'x'
+      readFile path `shouldReturn` "\r\ESC[K"
+    it "counts seconds during a slow action" $ withSystemTempFile "status" $ \path h -> do
+      _ <- withStatus h plain (threadDelay 1500000)
+      hClose h
+      readFile path `shouldReturn` "\r[waiting 1s]\r\ESC[K"
 
   describe "renderUsage" $ do
     it "omits cost when the provider reports none" $

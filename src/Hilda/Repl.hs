@@ -58,34 +58,41 @@ data Session = Session
   , sesUsage   :: Usage
   }
 
+-- | Shows a waiting line during model calls when stdout is a terminal.
 runRepl :: Config -> IO ()
-runRepl cfg = do
+runRepl cfg0 = do
+  status <- ansiTerminal stdout
+  paint <- (\on -> if on then ansi else plain) <$> colorEnabled stdout
+  interactive paint $
+    if status then cfg0 {cfgComplete = withStatus stdout paint . cfgComplete cfg0} else cfg0
+
+interactive :: Paint -> Config -> IO ()
+interactive paint cfg = do
   dir <- getXdgDirectory XdgState "hilda"
   createDirectoryIfMissing True dir
-  -- The prompt stays uncolored: escape codes in it break haskeline's
-  -- cursor arithmetic.
-  paint <- (\on -> if on then ansi else plain) <$> colorEnabled stdout
   runInputT defaultSettings {historyFile = Just (dir </> "history")} $ do
     say (paint BoldMagenta versionText)
     say (paint Dim ("model " <> cfgModel cfg <> ", mode " <> modeName (cfgMode cfg) <> ". /help for commands, Ctrl-D to exit."))
-    final <- loop paint (Session (cfgMode cfg) (cfgModel cfg) fresh mempty)
+    -- The prompt stays uncolored: escape codes in it break haskeline's
+    -- cursor arithmetic.
+    final <- loop (Session (cfgMode cfg) (cfgModel cfg) fresh mempty)
     say (paint Dim ("session: " <> renderUsage (sesUsage final)))
   where
     fresh = [System (cfgSystem cfg)]
 
-    loop paint s =
+    loop s =
       getInputLine "hilda> " >>= \case
         Nothing -> pure s
         Just raw -> case T.strip (T.pack raw) of
-          "" -> loop paint s
+          "" -> loop s
           line -> case parseCommand line of
             Just Quit -> pure s
-            Just cmd  -> run paint cmd s >>= loop paint
-            Nothing   -> turn paint s line >>= loop paint
+            Just cmd  -> run cmd s >>= loop
+            Nothing   -> turn s line >>= loop
 
     -- Ctrl-C abandons the turn and keeps the history from before it.
-    turn paint s line = handleInterrupt (say (paint Red "[interrupted]") >> pure s) . withInterrupt $ do
-      out <- runTurn (env paint s) (sesHistory s) line
+    turn s line = handleInterrupt (say (paint Red "[interrupted]") >> pure s) . withInterrupt $ do
+      out <- runTurn (env s) (sesHistory s) line
       case outStop out of
         Finished  -> say (outText out)
         TurnLimit -> say (paint Red "[stopped: turn limit reached]")
@@ -94,7 +101,7 @@ runRepl cfg = do
       say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> "]"))
       pure s {sesHistory = outHistory out, sesUsage = total}
 
-    env paint s =
+    env s =
       Env
         { envComplete = cfgComplete cfg
         , envModel = sesModel s
@@ -112,7 +119,7 @@ runRepl cfg = do
               }
         }
 
-    run paint cmd s = case cmd of
+    run cmd s = case cmd of
       Help -> s <$ mapM_ say helpText
       Clear -> s {sesHistory = fresh, sesUsage = mempty} <$ say "history cleared"
       SetMode Nothing -> s <$ say ("mode: " <> modeName (sesMode s))

@@ -49,7 +49,9 @@ data Output
 runHeadless :: Config -> Output -> Text -> IO ExitCode
 runHeadless cfg output prompt = do
   paint <- (\on -> if on then ansi else plain) <$> colorEnabled stderr
-  out <- runTurn (env (emit paint)) [System (cfgSystem cfg)] prompt
+  status <- (&& output == Text) <$> ansiTerminal stderr
+  let complete = if status then withStatus stderr paint . cfgComplete cfg else cfgComplete cfg
+  out <- runTurn (env complete (emit paint)) [System (cfgSystem cfg)] prompt
   case output of
     Text -> do
       case outStop out of
@@ -60,9 +62,9 @@ runHeadless cfg output prompt = do
     _ -> jsonLine (outcomeJson cfg out)
   pure (exitCodeFor (outStop out))
   where
-    env onEv =
+    env complete onEv =
       Env
-        { envComplete = cfgComplete cfg
+        { envComplete = complete
         , envModel = cfgModel cfg
         , envTools = builtinTools
         , envMode = cfgMode cfg

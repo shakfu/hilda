@@ -75,6 +75,8 @@ Token usage prints after each REPL turn, at REPL exit and after a headless run. 
 
 Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
 
+On a terminal, a `[waiting Ns]` line counts up while hilda waits for the model and is erased when the reply arrives. Responses are not streamed, so a long reply shows only this line until it completes.
+
 `--stream-json` prints `text`, `tool_call` and `tool_result` lines as they happen. Its last line is the `result` object that `--json` prints alone.
 
 Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50).

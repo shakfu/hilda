@@ -6,6 +6,8 @@ module Hilda.Render
   , ansi
   , plain
   , colorEnabled
+  , ansiTerminal
+  , withStatus
   , Line (..)
   , renderEvent
   , renderUsage
@@ -17,6 +19,8 @@ module Hilda.Render
   , isYes
   ) where
 
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Exception (bracket)
 import Data.Aeson (Value (..), decodeStrict)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
@@ -25,13 +29,14 @@ import Data.Char (isControl)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import Data.Text.Encoding (encodeUtf8)
 import Hilda.Agent (Event (..), resultLimit)
 import Hilda.Tools (truncateMiddle)
 import Hilda.Types
 import System.Environment (lookupEnv)
-import System.IO (Handle, hIsTerminalDevice)
+import System.IO (Handle, hFlush, hIsTerminalDevice)
 import Text.Printf (printf)
 
 data Color = Dim | Red | Cyan | BoldMagenta
@@ -51,14 +56,28 @@ ansi c t = "\ESC[" <> code c <> "m" <> t <> "\ESC[0m"
 plain :: Paint
 plain _ t = t
 
--- | Color only on a terminal, and not when NO_COLOR is set (no-color.org)
--- or TERM is dumb.
+-- | A terminal that understands escape sequences: a tty, and TERM is not dumb.
+ansiTerminal :: Handle -> IO Bool
+ansiTerminal h = (&&) <$> hIsTerminalDevice h <*> ((/= Just "dumb") <$> lookupEnv "TERM")
+
+-- | Color only on such a terminal, and not when NO_COLOR is set (no-color.org).
 colorEnabled :: Handle -> IO Bool
 colorEnabled h = do
-  tty <- hIsTerminalDevice h
   noColor <- maybe False (not . null) <$> lookupEnv "NO_COLOR"
-  term <- lookupEnv "TERM"
-  pure (tty && not noColor && term /= Just "dumb")
+  (&& not noColor) <$> ansiTerminal h
+
+-- | Run an action while a @[waiting Ns]@ line counts up on @h@, then erase
+-- the line. The first update comes after one second, so fast calls print
+-- nothing but the erase.
+withStatus :: Handle -> Paint -> IO a -> IO a
+withStatus h paint act = bracket (forkIO (tick 1)) stop (const act)
+  where
+    tick n = do
+      threadDelay 1000000
+      TIO.hPutStr h ("\r" <> paint Dim ("[waiting " <> tshow (n :: Int) <> "s]"))
+      hFlush h
+      tick (n + 1)
+    stop t = killThread t >> TIO.hPutStr h "\r\ESC[K" >> hFlush h
 
 -- | 'Partial' is printed without a newline; the next event completes it.
 data Line = Partial Text | Full Text
