@@ -189,13 +189,12 @@ runShell secs cmd = do
     -- The reader closes its own end: closing it here could block on the
     -- handle lock while the reader waits for an EOF that never comes.
     _ <- forkFinally (readCapped captureLimit readEnd) (\r -> hClose readEnd >> putMVar done r)
+    -- One deadline covers both: a command can close its output and keep
+    -- running, so end of output does not mean the process has exited.
     flip onException kill $
-      timeout (secs * 1000000) (takeMVar done) >>= \case
+      timeout (secs * 1000000) ((,) <$> (takeMVar done >>= either throwIO pure) <*> waitForProcess ph) >>= \case
         Nothing -> kill >> pure Nothing
-        Just (Left e) -> kill >> throwIO e
-        Just (Right out) -> do
-          code <- waitForProcess ph
-          pure (Just (code, decodeUtf8Lenient out))
+        Just (out, code) -> pure (Just (code, decodeUtf8Lenient out))
 
 captureLimit :: Int
 captureLimit = 1024 * 1024

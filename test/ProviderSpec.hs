@@ -7,6 +7,7 @@ import Data.Either (isLeft)
 import qualified Data.Text as T
 import Hilda.Provider
 import Hilda.Types
+import qualified Network.HTTP.Client as H
 import Test.Hspec
 
 -- | Decode an ASCII JSON fixture and run 'decodeReply' on it.
@@ -67,6 +68,13 @@ spec = do
         `shouldSatisfy` either (T.isInfixOf "rate limited") (const False)
     it "rejects a response without choices" $
       replyFrom "{\"choices\":[]}" `shouldSatisfy` isLeft
+
+  describe "retries" $ do
+    it "retries only 429 among statuses" $
+      map retryableStatus [429, 500, 502, 503, 400] `shouldBe` [True, False, False, False, False]
+    it "retries connection failures but not response timeouts" $ do
+      retryableError (H.HttpExceptionRequest H.defaultRequest H.ConnectionTimeout) `shouldBe` True
+      retryableError (H.HttpExceptionRequest H.defaultRequest H.ResponseTimeout) `shouldBe` False
 
   describe "parseKind" $
     it "round-trips every kind" $

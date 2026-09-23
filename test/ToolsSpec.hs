@@ -122,6 +122,10 @@ spec = do
       threadDelay 2500000
       doesFileExist marker `shouldReturn` False
 
+    it "times out a command that closes its output and keeps running" $ do
+      r <- timeout 5000000 (bash "exec >/dev/null 2>&1; sleep 30" 1)
+      r `shouldBe` Just (Left "timed out after 1s")
+
     it "caps captured output" $ do
       r <- bash "head -c 3000000 /dev/zero | tr '\\0' x" 30
       either (const 0) T.length r `shouldSatisfy` (\n -> n > 1000000 && n < 1100000)

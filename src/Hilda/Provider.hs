@@ -12,6 +12,8 @@ module Hilda.Provider
   , encodeRequest
   , decodeReply
   , newComplete
+  , retryableStatus
+  , retryableError
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -109,7 +111,9 @@ newComplete p =
               }
       pure (Right (send mgr . prepare))
 
--- | POST with up to three retries on transport errors, 429 and 5xx.
+-- | POST with up to three retries, only where the server cannot have run
+-- the request: 429, and connection failures before it was sent. A 5xx or
+-- response timeout may follow a billed completion, so those fail at once.
 send :: H.Manager -> H.Request -> IO (Either Text Reply)
 send mgr req = go (0 :: Int)
   where
@@ -118,10 +122,10 @@ send mgr req = go (0 :: Int)
     go n =
       try (H.httpLbs req mgr) >>= \case
         Left e
-          | n < retries, retryable e -> backoff n >> go (n + 1)
+          | n < retries, retryableError e -> backoff n >> go (n + 1)
           | otherwise -> pure (Left (describe e))
         Right resp
-          | code == 429 || code >= 500, n < retries -> backoff n >> go (n + 1)
+          | retryableStatus code, n < retries -> backoff n >> go (n + 1)
           | code >= 200 && code < 300 ->
               pure (first T.pack (eitherDecode body) >>= decodeReply)
           | otherwise ->
@@ -129,10 +133,16 @@ send mgr req = go (0 :: Int)
           where
             code = statusCode (H.responseStatus resp)
             body = H.responseBody resp
-    retryable = \case
-      H.HttpExceptionRequest {} -> True
-      H.InvalidUrlException {} -> False
     -- Show only the failure, never the request: it carries the API key.
     describe = \case
       H.HttpExceptionRequest _ c -> "request failed: " <> T.pack (show c)
       H.InvalidUrlException u why -> "invalid URL " <> T.pack u <> ": " <> T.pack why
+
+retryableStatus :: Int -> Bool
+retryableStatus = (== 429)
+
+retryableError :: H.HttpException -> Bool
+retryableError = \case
+  H.HttpExceptionRequest _ (H.ConnectionFailure _) -> True
+  H.HttpExceptionRequest _ H.ConnectionTimeout -> True
+  _ -> False

@@ -106,7 +106,9 @@ runRepl cfg = do
               { onEvent = \ev -> case renderEvent paint ev of
                   Partial t -> outputStr (T.unpack t)
                   Full t    -> say t
-              , confirm = \c -> maybe False (isYes . T.pack) <$> getInputLine (T.unpack (confirmQuestion c))
+              , confirm = \c -> do
+                  say (confirmDetail c)
+                  maybe False (isYes . T.pack) <$> getInputLine (T.unpack (confirmQuestion c))
               }
         }
 

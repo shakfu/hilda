@@ -85,6 +85,7 @@ confirmTty call = do
   if not tty
     then pure False
     else do
+      TIO.hPutStrLn stderr (confirmDetail call)
       TIO.hPutStr stderr (confirmQuestion call)
       hFlush stderr
       isYes . T.pack <$> getLine

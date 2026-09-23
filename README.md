@@ -59,16 +59,17 @@ hilda -p "fix the failing test"                 # one prompt, answer on stdout
 git diff | hilda -p -                           # prompt from stdin
 hilda -p "list TODOs" --json                    # one JSON object
 hilda -p "list TODOs" --stream-json             # one JSON line per event
+hilda --append-system-file style.md             # REPL with extra instructions
 ```
 
 Text mode prints the answer on stdout and tool activity on stderr, one line per tool call:
 
 ```
-[bash] git status -> ~40 tokens
+[bash] git status -> ~40
 [edit] src/Hilda/Agent.hs -> error: old_string not found
 ```
 
-The token count estimates the result the model receives, at four characters per token. Long calls are cut to 80 characters with `..`.
+The number after `->` estimates the tokens of the result the model receives, at four characters per token. Long calls are cut to 80 characters with `..`.
 
 Token usage prints after each REPL turn, at REPL exit and after a headless run. OpenRouter also reports cost (`usage.cost`, in credits), which hilda sums per session and includes in `--json` output. OpenAI-compatible servers report no cost, so none is shown.
 
@@ -92,7 +93,7 @@ Other tool output over 30,000 characters keeps its head and tail.
 | `-M`, `--mode` | read | write, edit, bash |
 |-|-|-|
 | `yolo` (default) | run | run |
-| `ask` | run | confirm on the terminal; refused without one |
+| `ask` | run | confirm on the terminal, showing every argument in full; refused without a terminal |
 | `read-only` | run | not offered to the model; refused if called |
 
 ## System prompt
