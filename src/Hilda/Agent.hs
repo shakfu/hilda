@@ -18,6 +18,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson (Value (..), eitherDecodeStrict)
 import Data.Bifunctor (first)
 import Data.Foldable (find, traverse_)
+import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -82,18 +83,21 @@ runTurn env history prompt = go 0 mempty (history <> [User prompt])
 
 -- | Authorise and run one tool call. Every failure becomes a tool result
 -- the model can read, so the loop itself never fails on a tool.
+-- Confirmation happens before 'CallStarted', so a prompt never splits the
+-- started and finished output of one call.
 dispatch :: MonadIO m => Env m -> ToolCall -> m Message
 dispatch env call = do
-  onEvent hooks (CallStarted call)
-  result <- case find ((== callName call) . toolName) (envTools env) of
+  permitted <- case find ((== callName call) . toolName) (envTools env) of
     Nothing -> pure (Left ("unknown tool: " <> callName call))
     Just tool -> case authorize (envMode env) (toolEffect tool) of
-      Allow -> liftIO (runTool tool (callArgs call))
+      Allow -> pure (Right tool)
       Deny why -> pure (Left why)
       Confirm ->
-        confirm hooks call >>= \case
-          True -> liftIO (runTool tool (callArgs call))
-          False -> pure (Left "the user declined this tool call")
+        confirm hooks call <&> \case
+          True -> Right tool
+          False -> Left "the user declined this tool call"
+  onEvent hooks (CallStarted call)
+  result <- either (pure . Left) (\tool -> liftIO (runTool tool (callArgs call))) permitted
   onEvent hooks (CallFinished call result)
   pure (ToolResult (callId call) (truncateMiddle resultLimit (either ("error: " <>) id result)))
   where

@@ -47,7 +47,13 @@ spec = do
   describe "decodeReply" $ do
     it "reads text and usage" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}"
-        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4))
+        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4 Nothing))
+    it "reads OpenRouter's cost" $
+      fmap replyUsage (replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"cost\":0.0021}}")
+        `shouldBe` Right (Usage 3 4 (Just 0.0021))
+    it "adds costs where reported" $ do
+      Usage 1 2 (Just 0.5) <> Usage 3 4 Nothing `shouldBe` Usage 4 6 (Just 0.5)
+      Usage 1 2 Nothing <> Usage 3 4 Nothing `shouldBe` Usage 4 6 Nothing
     it "treats blank content as absent" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":\"  \"}}]}" `shouldBe` Right (Reply Nothing [] mempty)
     it "reads tool calls with string arguments" $

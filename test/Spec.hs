@@ -6,6 +6,7 @@ import qualified CliSpec
 import qualified PolicySpec
 import qualified PromptSpec
 import qualified ProviderSpec
+import qualified RenderSpec
 import qualified ReplSpec
 import qualified StateSpec
 import qualified ToolsSpec
@@ -19,6 +20,7 @@ main = hspec $ do
   describe "Policy" PolicySpec.spec
   describe "Prompt" PromptSpec.spec
   describe "Provider" ProviderSpec.spec
+  describe "Render" RenderSpec.spec
   describe "Repl" ReplSpec.spec
   describe "State" StateSpec.spec
   describe "Tools" ToolsSpec.spec

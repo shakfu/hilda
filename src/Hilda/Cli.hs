@@ -53,7 +53,7 @@ data Options = Options
 
 optionsInfo :: ParserInfo Options
 optionsInfo =
-  info (options <**> helper) $
+  info (options <**> simpleVersioner (T.unpack versionText) <**> helper) $
     fullDesc
       <> progDesc "Coding agent for OpenAI-compatible APIs and OpenRouter. Starts a REPL unless -p is given."
       <> footer

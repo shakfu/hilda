@@ -2,25 +2,26 @@
 module Hilda.App
   ( Config (..)
   , Output (..)
+  , versionText
   , runHeadless
   , eventJson
   , outcomeJson
   , exitCodeFor
-  , renderEvent
-  , confirmQuestion
-  , isYes
   ) where
 
 import Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Text (Text)
+import Data.Version (showVersion)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Hilda.Agent
 import Hilda.Policy
+import Hilda.Render
 import Hilda.Provider (ProviderKind, kindName)
 import Hilda.Tools (builtinTools, truncateMiddle)
 import Hilda.Types
+import Paths_hilda (version)
 import System.Exit (ExitCode (..))
 import System.IO
 
@@ -34,6 +35,10 @@ data Config = Config
   , cfgRemember :: Text -> IO () -- ^ Record the model for the next run.
   }
 
+-- | Shown by @--version@ and at REPL start.
+versionText :: Text
+versionText = "hilda agent " <> T.pack (showVersion version)
+
 data Output
   = Text       -- ^ Answer on stdout, tool activity on stderr.
   | Json       -- ^ One outcome object on stdout.
@@ -43,26 +48,31 @@ data Output
 -- | Run one prompt to completion and return the exit code.
 runHeadless :: Config -> Output -> Text -> IO ExitCode
 runHeadless cfg output prompt = do
-  out <- runTurn env [System (cfgSystem cfg)] prompt
+  paint <- (\on -> if on then ansi else plain) <$> colorEnabled stderr
+  out <- runTurn (env (emit paint)) [System (cfgSystem cfg)] prompt
   case output of
-    Text -> case outStop out of
-      Finished  -> TIO.putStrLn (outText out)
-      TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
-      Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> e)
+    Text -> do
+      case outStop out of
+        Finished  -> TIO.putStrLn (outText out)
+        TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
+        Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> e)
+      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> "]"))
     _ -> jsonLine (outcomeJson cfg out)
   pure (exitCodeFor (outStop out))
   where
-    env =
+    env onEv =
       Env
         { envComplete = cfgComplete cfg
         , envModel = cfgModel cfg
         , envTools = builtinTools
         , envMode = cfgMode cfg
         , envMaxTurns = cfgMaxTurns cfg
-        , envHooks = Hooks {onEvent = emit, confirm = confirmTty}
+        , envHooks = Hooks {onEvent = onEv, confirm = confirmTty}
         }
-    emit = case output of
-      Text       -> TIO.hPutStrLn stderr . renderEvent
+    emit paint = case output of
+      Text -> \ev -> case renderEvent paint ev of
+        Partial t -> TIO.hPutStr stderr t >> hFlush stderr
+        Full t    -> TIO.hPutStrLn stderr t
       Json       -> const (pure ())
       StreamJson -> jsonLine . eventJson
     -- Flush per line: stdout is block-buffered when piped.
@@ -78,27 +88,6 @@ confirmTty call = do
       TIO.hPutStr stderr (confirmQuestion call)
       hFlush stderr
       isYes . T.pack <$> getLine
-
-confirmQuestion :: ToolCall -> Text
-confirmQuestion call = "allow " <> callName call <> " " <> summarize (callArgs call) <> "? [y/N] "
-
-isYes :: Text -> Bool
-isYes t = T.toLower (T.strip t) `elem` ["y", "yes"]
-
-renderEvent :: Event -> Text
-renderEvent = \case
-  Narration t -> t
-  CallStarted c -> "> " <> callName c <> " " <> summarize (callArgs c)
-  CallFinished _ (Left e) -> "  error: " <> summarize e
-  CallFinished _ (Right r) -> "  ok (" <> T.pack (show (length (T.lines r))) <> " lines)"
-
--- | One line, at most 160 characters.
-summarize :: Text -> Text
-summarize t
-  | T.length flat > 160 = T.take 157 flat <> "..."
-  | otherwise = flat
-  where
-    flat = T.unwords (T.words t)
 
 -- | Stream-json line for one event. Tool output is truncated as the model sees it.
 eventJson :: Event -> Value

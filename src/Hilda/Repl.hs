@@ -13,11 +13,13 @@ import qualified Data.Text as T
 import Hilda.Agent
 import Hilda.App
 import Hilda.Policy
+import Hilda.Render
 import Hilda.Tools
 import Hilda.Types
 import System.Console.Haskeline
 import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.FilePath ((</>))
+import System.IO (stdout)
 
 data Command
   = Help
@@ -60,32 +62,39 @@ runRepl :: Config -> IO ()
 runRepl cfg = do
   dir <- getXdgDirectory XdgState "hilda"
   createDirectoryIfMissing True dir
+  -- The prompt stays uncolored: escape codes in it break haskeline's
+  -- cursor arithmetic.
+  paint <- (\on -> if on then ansi else plain) <$> colorEnabled stdout
   runInputT defaultSettings {historyFile = Just (dir </> "history")} $ do
-    say ("hilda: " <> cfgModel cfg <> ", mode " <> modeName (cfgMode cfg) <> ". /help for commands, Ctrl-D to exit.")
-    loop (Session (cfgMode cfg) (cfgModel cfg) fresh mempty)
+    say versionText
+    say (paint Dim ("model " <> cfgModel cfg <> ", mode " <> modeName (cfgMode cfg) <> ". /help for commands, Ctrl-D to exit."))
+    final <- loop paint (Session (cfgMode cfg) (cfgModel cfg) fresh mempty)
+    say (paint Dim ("session: " <> renderUsage (sesUsage final)))
   where
     fresh = [System (cfgSystem cfg)]
 
-    loop s =
+    loop paint s =
       getInputLine "hilda> " >>= \case
-        Nothing -> pure ()
+        Nothing -> pure s
         Just raw -> case T.strip (T.pack raw) of
-          "" -> loop s
+          "" -> loop paint s
           line -> case parseCommand line of
-            Just Quit -> pure ()
-            Just cmd  -> run cmd s >>= loop
-            Nothing   -> turn s line >>= loop
+            Just Quit -> pure s
+            Just cmd  -> run paint cmd s >>= loop paint
+            Nothing   -> turn paint s line >>= loop paint
 
     -- Ctrl-C abandons the turn and keeps the history from before it.
-    turn s line = handleInterrupt (say "[interrupted]" >> pure s) . withInterrupt $ do
-      out <- runTurn (env s) (sesHistory s) line
+    turn paint s line = handleInterrupt (say (paint Red "[interrupted]") >> pure s) . withInterrupt $ do
+      out <- runTurn (env paint s) (sesHistory s) line
       case outStop out of
         Finished  -> say (outText out)
-        TurnLimit -> say "[stopped: turn limit reached]"
-        Failed e  -> say ("error: " <> e)
-      pure s {sesHistory = outHistory out, sesUsage = sesUsage s <> outUsage out}
+        TurnLimit -> say (paint Red "[stopped: turn limit reached]")
+        Failed e  -> say (paint Red ("error: " <> e))
+      let total = sesUsage s <> outUsage out
+      say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> "]"))
+      pure s {sesHistory = outHistory out, sesUsage = total}
 
-    env s =
+    env paint s =
       Env
         { envComplete = cfgComplete cfg
         , envModel = sesModel s
@@ -94,18 +103,20 @@ runRepl cfg = do
         , envMaxTurns = cfgMaxTurns cfg
         , envHooks =
             Hooks
-              { onEvent = say . renderEvent
+              { onEvent = \ev -> case renderEvent paint ev of
+                  Partial t -> outputStr (T.unpack t)
+                  Full t    -> say t
               , confirm = \c -> maybe False (isYes . T.pack) <$> getInputLine (T.unpack (confirmQuestion c))
               }
         }
 
-    run cmd s = case cmd of
+    run paint cmd s = case cmd of
       Help -> s <$ mapM_ say helpText
       Clear -> s {sesHistory = fresh, sesUsage = mempty} <$ say "history cleared"
       SetMode Nothing -> s <$ say ("mode: " <> modeName (sesMode s))
       SetMode (Just m) -> case parseMode m of
         Just mode -> s {sesMode = mode} <$ say ("mode: " <> modeName mode)
-        Nothing -> s <$ say "modes: yolo, ask, read-only"
+        Nothing -> s <$ say (paint Red "modes: yolo, ask, read-only")
       SetModel Nothing -> s <$ say ("model: " <> sesModel s)
       SetModel (Just m) -> do
         liftIO (cfgRemember cfg m)
@@ -113,13 +124,11 @@ runRepl cfg = do
       ListTools ->
         s <$ mapM_ (\t -> say (toolName t <> " - " <> toolDescription t)) (visibleTools (sesMode s) builtinTools)
       ShowSystem -> s <$ say (cfgSystem cfg)
-      ShowUsage ->
-        s <$ say ("tokens: " <> tshow (usagePrompt (sesUsage s)) <> " in, " <> tshow (usageCompletion (sesUsage s)) <> " out")
-      Unknown name -> s <$ say ("unknown command /" <> name <> "; try /help")
+      ShowUsage -> s <$ say ("session: " <> renderUsage (sesUsage s))
+      Unknown name -> s <$ say (paint Red ("unknown command /" <> name <> "; try /help"))
       Quit -> pure s
 
     say = outputStrLn . T.unpack
-    tshow = T.pack . show
 
 helpText :: [Text]
 helpText =
@@ -127,7 +136,7 @@ helpText =
   , "/model [name]               show or set the model"
   , "/tools                      list tools available in this mode"
   , "/system                     print the system prompt"
-  , "/usage                      token totals for this session"
+  , "/usage                      tokens and cost for this session"
   , "/clear                      start a new conversation"
   , "/quit                       exit (or Ctrl-D)"
   ]

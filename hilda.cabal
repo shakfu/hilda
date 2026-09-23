@@ -1,13 +1,15 @@
 cabal-version:      3.0
 name:               hilda
-version:            0.1.0.0
+version:            0.1.0
 synopsis:           A small coding agent for OpenAI-compatible chat APIs
 license:            MIT
 license-file:       LICENSE
 author:             Shakeeb Alireza
 category:           Development
 build-type:         Simple
-extra-doc-files:    README.md
+extra-doc-files:
+  CHANGELOG.md
+  README.md
 
 common shared
   default-language:   GHC2021
@@ -38,10 +40,14 @@ library
     Hilda.Policy
     Hilda.Prompt
     Hilda.Provider
+    Hilda.Render
     Hilda.Repl
     Hilda.State
     Hilda.Tools
     Hilda.Types
+
+  other-modules:   Paths_hilda
+  autogen-modules: Paths_hilda
 
   build-depends:
     , containers            >=0.6  && <0.8
@@ -73,6 +79,7 @@ test-suite spec
     PolicySpec
     PromptSpec
     ProviderSpec
+    RenderSpec
     ReplSpec
     StateSpec
     ToolsSpec

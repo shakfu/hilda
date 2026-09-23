@@ -3,6 +3,46 @@
 A coding agent in Haskell. It talks to any OpenAI-compatible chat-completions
 server or to OpenRouter, and runs headless or as a REPL.
 
+## Why write an agent in Haskell?
+
+An agent loop is mostly plumbing: JSON arrives from an untrusted model and
+drives effects on the machine. Haskell's type system makes that boundary
+explicit.
+
+- **The backend is a function type.** `Complete = Request -> IO (Either Text Reply)`
+  is the loop's only dependency on the network. `test/AgentSpec.hs`
+  substitutes a scripted backend without a mocking library.
+- **Permissions are a total function.** `authorize :: Mode -> Effect -> Verdict`
+  maps each mode and tool effect to allow, confirm or deny. With `-Wall`,
+  a new mode produces a warning until it is handled. A new effect is
+  allowed in `yolo`, confirmed in `ask` and denied in `read-only`.
+- **Effects are visible in signatures.** Edits (`applyEdit`), rendering
+  (`renderEvent`), option resolution (`resolveProvider`) and prompt
+  assembly (`assemble`) have no `IO` in their types. Their tests call them
+  directly, with no temp files or servers.
+- **One loop, two monads.** `runTurn` runs in any `MonadIO`. Headless mode
+  uses `IO`. The REPL uses haskeline's `InputT`, so `ask`-mode prompts
+  share the line editor.
+- **Model output cannot crash the loop.** Malformed tool arguments, unknown
+  tools and IO errors become `Either` values. The model receives them as
+  tool results.
+- **The runtime handles cancellation.** Green threads, `timeout` and
+  asynchronous exceptions implement the bash timeout (it kills the process
+  group) and Ctrl-C cancellation of a REPL turn. The shell runner is
+  about 40 lines.
+- **One native executable.** No interpreter or package tree at run time.
+  The binary links only system libraries: libc, libm, libz, libtinfo and
+  libgmp.
+
+Costs:
+
+- No official OpenAI or OpenRouter SDK exists for Haskell. `Hilda.Provider`
+  is a hand-written HTTP client, so new API features need manual support.
+- A clean build compiles about 100 dependencies. That takes minutes, not
+  seconds.
+- Building needs `libgmp-dev`. The binary needs libgmp at run time.
+- Fewer contributors read Haskell than Python or TypeScript.
+
 ## Build
 
 Requires GHC 9.10 and cabal (both via ghcup) and `libgmp-dev`.
@@ -10,7 +50,7 @@ Requires GHC 9.10 and cabal (both via ghcup) and `libgmp-dev`.
 ```sh
 make build     # cabal build all
 make test      # cabal test
-make install   # copies hilda to ~/.local/bin
+make install   # copies a stripped hilda to cabal's installdir (~/.cabal/bin here)
 ```
 
 ## Providers and models
@@ -38,7 +78,25 @@ hilda -p "list TODOs" --json                    # one JSON object
 hilda -p "list TODOs" --stream-json             # one JSON line per event
 ```
 
-Text mode prints the answer on stdout and tool activity on stderr.
+Text mode prints the answer on stdout and tool activity on stderr, one
+line per tool call:
+
+```
+[bash] git status -> ~40 tokens
+[edit] src/Hilda/Agent.hs -> error: old_string not found
+```
+
+The token count estimates the result the model receives, at four
+characters per token. Long calls are cut to 80 characters with `..`.
+
+Token usage prints after each REPL turn, at REPL exit and after a headless
+run. OpenRouter also reports cost (`usage.cost`, in credits), which hilda
+sums per session and includes in `--json` output. OpenAI-compatible
+servers report no cost, so none is shown.
+
+Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb`
+turns it off.
+
 `--stream-json` prints `text`, `tool_call` and `tool_result` lines as they
 happen. Its last line is the `result` object that `--json` prints alone.
 
@@ -67,5 +125,6 @@ Tools: `read`, `write`, `edit` (exact, unique string replacement), `bash`
 
 ## REPL commands
 
-`/mode`, `/model`, `/tools`, `/system`, `/usage`, `/clear`, `/quit`.
+`/mode`, `/model`, `/tools`, `/system`, `/usage` (tokens and cost),
+`/clear`, `/quit`.
 Ctrl-C cancels the current turn. Ctrl-D exits.

@@ -2,11 +2,12 @@ module CliSpec (spec) where
 
 import Data.Either (isLeft)
 import Data.Text (Text)
-import Hilda.App (Output (..))
+import qualified Data.Text as T
+import Hilda.App (Output (..), versionText)
 import Hilda.Cli
 import Hilda.Policy (Mode (..))
 import Hilda.Provider
-import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure)
+import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, renderFailure)
 import Test.Hspec
 
 parse :: [String] -> Maybe Options
@@ -41,6 +42,10 @@ spec = do
       fmap optAgents (parse ["--agents", "a.md", "--agents", "b.md"]) `shouldBe` Just (Explicit ["a.md", "b.md"])
     it "rejects --system with --system-file" $
       parse ["--system", "x", "--system-file", "y"] `shouldBe` Nothing
+    it "prints the version and exits" $
+      case execParserPure defaultPrefs optionsInfo ["--version"] of
+        Failure f -> fst (renderFailure f "hilda") `shouldBe` T.unpack versionText
+        _ -> expectationFailure "--version did not exit"
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 

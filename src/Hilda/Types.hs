@@ -14,6 +14,7 @@ module Hilda.Types
 import Data.Aeson
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Maybe (fromMaybe)
+import Data.Monoid (Sum (..))
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
 
@@ -34,14 +35,16 @@ data Message
 data Usage = Usage
   { usagePrompt     :: !Int
   , usageCompletion :: !Int
+  , usageCost       :: !(Maybe Double) -- ^ Reported by OpenRouter, in credits.
   }
   deriving stock (Eq, Show)
 
+-- | Costs add where reported; a reply without one leaves the total alone.
 instance Semigroup Usage where
-  Usage a b <> Usage c d = Usage (a + c) (b + d)
+  Usage a b c <> Usage d e f = Usage (a + d) (b + e) (getSum <$> (Sum <$> c) <> (Sum <$> f))
 
 instance Monoid Usage where
-  mempty = Usage 0 0
+  mempty = Usage 0 0 Nothing
 
 -- | One model response.
 data Reply = Reply
@@ -92,8 +95,8 @@ instance ToJSON Message where
 
 instance ToJSON Usage where
   toJSON u =
-    object ["prompt_tokens" .= usagePrompt u, "completion_tokens" .= usageCompletion u]
+    object ["prompt_tokens" .= usagePrompt u, "completion_tokens" .= usageCompletion u, "cost" .= usageCost u]
 
 instance FromJSON Usage where
   parseJSON = withObject "Usage" $ \o ->
-    Usage <$> o .:? "prompt_tokens" .!= 0 <*> o .:? "completion_tokens" .!= 0
+    Usage <$> o .:? "prompt_tokens" .!= 0 <*> o .:? "completion_tokens" .!= 0 <*> o .:? "cost"
