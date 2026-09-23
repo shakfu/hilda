@@ -59,6 +59,10 @@ spec = do
         ["-V", "--version"]
     it "accepts -M for --mode" $
       fmap optMode (parse ["-M", "ask"]) `shouldBe` Just Ask
+    it "parses --context-budget and rejects zero" $ do
+      fmap optBudget (parse []) `shouldBe` Just 100000
+      fmap optBudget (parse ["--context-budget", "8000"]) `shouldBe` Just 8000
+      parse ["--context-budget", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 

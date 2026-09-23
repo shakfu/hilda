@@ -111,7 +111,7 @@ renderEvent paint = \case
   CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
   CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> elide 100 e))
   ContextTrimmed n chars ->
-    Full (paint Dim ("[context: elided " <> tshow n <> " old tool results, ~" <> tshow (chars `div` 4) <> " tokens]"))
+    Full (paint Dim ("[context: elided " <> tshow n <> " old tool result" <> (if n == 1 then "" else "s") <> ", ~" <> tshow (chars `div` 4) <> " tokens]"))
 
 -- | The argument that identifies the call (command or path), else the raw
 -- arguments; one line, at most 80 characters.

@@ -18,6 +18,9 @@ spec = do
       renderEvent plain (CallStarted bash) `shouldBe` Partial "[bash] git status "
     it "finishes the line with an estimated token count" $
       renderEvent plain (CallFinished bash (Right (T.replicate 40 "x"))) `shouldBe` Full "-> ~10"
+    it "reports context trimming" $ do
+      renderEvent plain (ContextTrimmed 2 4000) `shouldBe` Full "[context: elided 2 old tool results, ~1000 tokens]"
+      renderEvent plain (ContextTrimmed 1 400) `shouldBe` Full "[context: elided 1 old tool result, ~100 tokens]"
     it "finishes the line with the error" $
       renderEvent plain (CallFinished bash (Left "boom")) `shouldBe` Full "-> error: boom"
     it "wraps colored text in ANSI codes" $ do

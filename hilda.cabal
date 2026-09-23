@@ -78,6 +78,7 @@ test-suite spec
     AgentSpec
     AppSpec
     CliSpec
+    ContextSpec
     PolicySpec
     PromptSpec
     ProviderSpec

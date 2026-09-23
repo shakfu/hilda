@@ -36,6 +36,7 @@ mkEnv complete mode answer =
     , envTools = builtinTools
     , envMode = mode
     , envMaxTurns = 10
+    , envBudget = 1000000
     , envHooks = Hooks {onEvent = const (pure ()), confirm = const (pure answer)}
     }
 
@@ -103,6 +104,7 @@ spec = do
                 CallStarted _ -> record "started"
                 CallFinished _ _ -> record "finished"
                 Narration _ -> record "narration"
+                ContextTrimmed {} -> record "trimmed"
             , confirm = \_ -> record "confirm" >> pure True
             }
     _ <- runTurn (mkEnv complete Ask True) {envHooks = hooks} [] "write it"
@@ -136,6 +138,21 @@ spec = do
     out <- runTurn (mkEnv complete Yolo True) {envMaxTurns = 2} [] "go"
     outStop out `shouldBe` TurnLimit
     outTurns out `shouldBe` 2
+
+  it "elides old tool results over budget and reports it" $ do
+    events <- newIORef []
+    (complete, requests) <- scripted [reply (Just "ok") []]
+    let old = [User "a", Assistant Nothing [ToolCall "c1" "read" "{}"], ToolResult "c1" (T.replicate 8000 "x"), Assistant (Just "done") []]
+        env = (mkEnv complete Yolo True) {envBudget = 100}
+        hooks = (envHooks env) {onEvent = \case
+          ContextTrimmed n _ -> modifyIORef events (n :)
+          _ -> pure ()}
+    out <- runTurn env {envHooks = hooks} old "next"
+    readIORef events `shouldReturn` [1]
+    requests >>= \case
+      [r] -> map snd (toolResults (reqMessages r)) `shouldSatisfy` all ("[elided" `T.isPrefixOf`)
+      rs -> expectationFailure (show (length rs))
+    outContext out `shouldBe` 10
 
   it "stops with the provider's error" $ do
     (complete, _) <- scripted []

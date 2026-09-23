@@ -79,6 +79,16 @@ Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting N
 
 `--stream-json` prints `text_delta` lines as reply text streams, and `text`, `tool_call` and `tool_result` lines as they happen. Its last line is the `result` object that `--json` prints alone.
 
+## Context budget
+
+hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. hilda prints `[context: elided N old tool results]` when this happens.
+
+- Results the model has not seen yet are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
+- Elision is written into the history, so the start of the conversation stays the same between calls and provider prompt caching keeps working.
+- Set the budget below your model's context window. Local models often have 8,000 to 32,000 tokens.
+
+The REPL footer and `/usage` show the context size: the prompt tokens of the last model call. `--json` output includes it as `context_tokens`.
+
 Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50).
 
 ## Tools and modes

@@ -1,0 +1,64 @@
+module ContextSpec (spec) where
+
+import qualified Data.Text as T
+import Hilda.Context
+import Hilda.Types
+import Test.Hspec
+
+big :: Int -> T.Text
+big n = T.replicate n "x"
+
+call :: T.Text -> ToolCall
+call i = ToolCall i "read" "{}"
+
+-- | Two old results, then a result the model has not seen yet.
+history :: [Message]
+history =
+  [ System "sys"
+  , User "go"
+  , Assistant Nothing [call "a"]
+  , ToolResult "a" (big 4000)
+  , Assistant Nothing [call "b"]
+  , ToolResult "b" (big 4000)
+  , Assistant Nothing [call "c"]
+  , ToolResult "c" (big 4000)
+  ]
+
+results :: [Message] -> [T.Text]
+results hist = [t | ToolResult _ t <- hist]
+
+spec :: Spec
+spec = do
+  it "estimates four characters per token" $
+    historyTokens [User (big 400), ToolResult "a" (big 400)] `shouldBe` 200
+
+  it "leaves a history within budget alone" $
+    fitContext 10000 history `shouldBe` (history, 0, 0)
+
+  it "elides the oldest results first, only as many as needed" $ do
+    let (hist, n, _) = fitContext 2500 history
+    n `shouldBe` 1
+    map T.length (results hist) `shouldSatisfy` \case
+      [a, b, c] -> a < 100 && b == 4000 && c == 4000
+      _ -> False
+
+  it "never elides results after the last assistant message" $ do
+    let (hist, n, _) = fitContext 1 history
+    n `shouldBe` 2
+    last (results hist) `shouldBe` big 4000
+
+  it "keeps user and assistant messages" $ do
+    let (hist, _, _) = fitContext 1 history
+    [m | m <- hist, not (isResult m)] `shouldBe` [m | m <- history, not (isResult m)]
+
+  it "is idempotent" $ do
+    let (once, _, _) = fitContext 1 history
+    fitContext 1 once `shouldBe` (once, 0, 0)
+
+  it "reports the characters removed" $ do
+    let (_, _, chars) = fitContext 2500 history
+    chars `shouldBe` 4000 - T.length (elidedStub 4000)
+  where
+    isResult = \case
+      ToolResult {} -> True
+      _ -> False
