@@ -16,7 +16,7 @@ field :: Text -> Value -> Maybe Value
 field k = parseMaybe (withObject "event" (.: Key.fromText k))
 
 cfg :: Config
-cfg = Config (const (pure (Left "unused"))) OpenRouter "m" Yolo "sys" 5 (const (pure ()))
+cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure ()))
 
 spec :: Spec
 spec = do
@@ -27,6 +27,10 @@ spec = do
         `shouldBe` map (Just . String) ["text", "tool_call", "tool_result"]
     it "marks failed tool results" $
       field "ok" (eventJson (CallFinished c (Left "boom"))) `shouldBe` Just (Bool False)
+
+  describe "deltaJson" $
+    it "tags streamed text" $
+      field "type" (deltaJson "hi") `shouldBe` Just (String "text_delta")
 
   describe "outcomeJson" $
     it "tags the result line and reports the stop reason" $ do

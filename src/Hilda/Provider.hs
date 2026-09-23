@@ -18,19 +18,20 @@ module Hilda.Provider
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
+import System.Timeout (timeout)
 import Data.Aeson
-import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
-import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString as BS
 import Data.List (dropWhileEnd)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
+import Hilda.Stream
 import Hilda.Types
 import qualified Network.HTTP.Client as H
 import Network.HTTP.Client.TLS (newTlsManagerWith, tlsManagerSettings)
-import Network.HTTP.Types (Header, statusCode)
+import Network.HTTP.Types (Header, hContentType, statusCode)
 
 data ProviderKind = OpenAICompatible | OpenRouter
   deriving stock (Eq, Show, Enum, Bounded)
@@ -60,7 +61,11 @@ keyVariable OpenRouter       = "OPENROUTER_API_KEY"
 encodeRequest :: Request -> Value
 encodeRequest r =
   object $
-    ["model" .= reqModel r, "messages" .= reqMessages r]
+    [ "model" .= reqModel r
+    , "messages" .= reqMessages r
+    , "stream" .= True
+    , "stream_options" .= object ["include_usage" .= True]
+    ]
       <> if null (reqTools r) then [] else ["tools" .= reqTools r, "tool_choice" .= ("auto" :: Text)]
 
 -- | Decode a chat-completions response body. OpenRouter can report errors
@@ -70,7 +75,7 @@ decodeReply = first T.pack . parseEither parser
   where
     parser = withObject "response" $ \o ->
       o .:? "error" >>= \case
-        Just err -> fail ("provider error: " <> errorMessage err)
+        Just err -> fail ("provider error: " <> providerError err)
         Nothing ->
           o .: "choices" >>= \case
             [] -> fail "response has no choices"
@@ -83,9 +88,6 @@ decodeReply = first T.pack . parseEither parser
     nonEmpty = \case
       Just t | not (T.null (T.strip t)) -> Just t
       _ -> Nothing
-    errorMessage = \case
-      Object e | Just (String s) <- KM.lookup "message" e -> T.unpack s
-      v -> show v
 
 headers :: Provider -> [Header]
 headers p =
@@ -109,34 +111,71 @@ newComplete p =
               , H.requestHeaders = headers p
               , H.requestBody = H.RequestBodyLBS (encode (encodeRequest r))
               }
-      pure (Right (send mgr . prepare))
+      pure (Right (\sink r -> send mgr (prepare r) sink))
+
+data Attempt = Retry Text | Done (Either Text Reply)
 
 -- | POST with up to three retries, only where the server cannot have run
 -- the request: 429, and connection failures before it was sent. A 5xx or
 -- response timeout may follow a billed completion, so those fail at once.
-send :: H.Manager -> H.Request -> IO (Either Text Reply)
-send mgr req = go (0 :: Int)
+send :: H.Manager -> H.Request -> (Text -> IO ()) -> IO (Either Text Reply)
+send mgr req sink = go (0 :: Int)
   where
     retries = 3
     backoff n = threadDelay (1000000 * 2 ^ n)
     go n =
-      try (H.httpLbs req mgr) >>= \case
+      try (H.withResponse req mgr (receive sink)) >>= \case
         Left e
           | n < retries, retryableError e -> backoff n >> go (n + 1)
           | otherwise -> pure (Left (describe e))
-        Right resp
-          | retryableStatus code, n < retries -> backoff n >> go (n + 1)
-          | code >= 200 && code < 300 ->
-              pure (first T.pack (eitherDecode body) >>= decodeReply)
-          | otherwise ->
-              pure (Left ("HTTP " <> T.pack (show code) <> ": " <> decodeUtf8Lenient (BL.toStrict body)))
-          where
-            code = statusCode (H.responseStatus resp)
-            body = H.responseBody resp
+        Right (Retry err)
+          | n < retries -> backoff n >> go (n + 1)
+          | otherwise -> pure (Left err)
+        Right (Done r) -> pure r
     -- Show only the failure, never the request: it carries the API key.
     describe = \case
       H.HttpExceptionRequest _ c -> "request failed: " <> T.pack (show c)
       H.InvalidUrlException u why -> "invalid URL " <> T.pack u <> ": " <> T.pack why
+
+-- | Read one response. A server that ignores @stream@ answers with plain
+-- JSON; its text reaches the sink in one piece.
+receive :: (Text -> IO ()) -> H.Response H.BodyReader -> IO Attempt
+receive sink resp
+  | retryableStatus code = Retry . httpError <$> consume
+  | code < 200 || code >= 300 = Done . Left . httpError <$> consume
+  | streaming = Done <$> readStream (H.responseBody resp) sink
+  | otherwise = do
+      r <- (\b -> first T.pack (eitherDecodeStrict b) >>= decodeReply) <$> consume
+      either (const (pure ())) (mapM_ sink . replyText) r
+      pure (Done r)
+  where
+    code = statusCode (H.responseStatus resp)
+    consume = BS.concat <$> H.brConsume (H.responseBody resp)
+    httpError body = "HTTP " <> T.pack (show code) <> ": " <> decodeUtf8Lenient body
+    streaming = maybe False ("text/event-stream" `BS.isPrefixOf`) (lookup hContentType (H.responseHeaders resp))
+
+-- | Seconds without any bytes before a stream counts as stalled.
+streamIdleLimit :: Int
+streamIdleLimit = 300
+
+-- | Fold server-sent events into a reply, passing text deltas to the sink.
+readStream :: H.BodyReader -> (Text -> IO ()) -> IO (Either Text Reply)
+readStream body sink = loop BS.empty emptyPartial
+  where
+    loop buf p =
+      timeout (streamIdleLimit * 1000000) (H.brRead body) >>= \case
+        Nothing -> pure (Left ("stream stalled: no data for " <> T.pack (show streamIdleLimit) <> "s"))
+        Just chunk
+          -- End of body without [DONE]: flush the last line and finish.
+          | BS.null chunk -> feed (fst (sseData (buf <> "\n"))) Nothing p
+          | otherwise -> let (payloads, rest) = sseData (buf <> chunk) in feed payloads (Just rest) p
+    feed [] rest p = maybe (pure (Right (finishPartial p))) (`loop` p) rest
+    -- Read to the end after [DONE] so the connection can be reused.
+    feed ("[DONE]" : _) _ p = Right (finishPartial p) <$ timeout 5000000 (H.brConsume body)
+    feed (d : ds) rest p =
+      case first T.pack (eitherDecodeStrict d) >>= stepChunk p of
+        Left e -> pure (Left e)
+        Right (p', delta) -> mapM_ sink delta >> feed ds rest p'
 
 retryableStatus :: Int -> Bool
 retryableStatus = (== 429)

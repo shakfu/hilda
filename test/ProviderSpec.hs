@@ -21,11 +21,11 @@ keys _          = []
 spec :: Spec
 spec = do
   describe "encodeRequest" $ do
-    it "omits tools when there are none" $
-      keys (encodeRequest (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages"]
+    it "asks for a stream and omits tools when there are none" $
+      keys (encodeRequest (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
     it "sends tools with tool_choice auto" $ do
       let v = encodeRequest (Request "m" [] [object []])
-      keys v `shouldMatchList` ["model", "messages", "tools", "tool_choice"]
+      keys v `shouldMatchList` ["model", "messages", "stream", "stream_options", "tools", "tool_choice"]
 
   describe "message encoding" $ do
     it "encodes assistant tool calls in wire format" $

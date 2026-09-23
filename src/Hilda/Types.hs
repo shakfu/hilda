@@ -61,9 +61,10 @@ data Request = Request
   }
   deriving stock (Eq, Show)
 
--- | A chat backend. The agent loop depends only on this function type,
--- so tests substitute a scripted one.
-type Complete = Request -> IO (Either Text Reply)
+-- | A chat backend. It passes each piece of reply text to the sink as it
+-- arrives. The agent loop depends only on this function type, so tests
+-- substitute a scripted one and output modes wrap it to observe the text.
+type Complete = (Text -> IO ()) -> Request -> IO (Either Text Reply)
 
 instance ToJSON ToolCall where
   toJSON c =

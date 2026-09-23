@@ -50,6 +50,7 @@ data Options = Options
   , optAppend   :: Maybe SystemSource
   , optAgents   :: AgentsSource
   , optMaxTurns :: Int
+  , optBudget   :: Int
   }
   deriving stock (Eq, Show)
 
@@ -101,6 +102,11 @@ options =
             <|> pure Discover
         )
     <*> option auto (long "max-turns" <> metavar "N" <> value 50 <> showDefault <> help "Model calls allowed per prompt")
+    <*> option
+      (auto >>= \n -> if n > 0 then pure n else readerError "must be positive")
+      ( long "context-budget" <> metavar "TOKENS" <> value 100000 <> showDefault
+          <> help "Elide the oldest tool results when the history exceeds this many tokens (estimated at 4 characters each)"
+      )
 
 -- | Pick the backend, key and model. Pure over the environment lookup and
 -- the remembered models, so it is testable.
@@ -169,6 +175,7 @@ main = do
           , cfgMode = optMode o
           , cfgSystem = system
           , cfgMaxTurns = optMaxTurns o
+          , cfgBudget = optBudget o
           , cfgRemember = remember
           }
   case optPrompt o of

@@ -9,6 +9,7 @@ import qualified ProviderSpec
 import qualified RenderSpec
 import qualified ReplSpec
 import qualified StateSpec
+import qualified StreamSpec
 import qualified ToolsSpec
 import Test.Hspec
 
@@ -23,4 +24,5 @@ main = hspec $ do
   describe "Render" RenderSpec.spec
   describe "Repl" ReplSpec.spec
   describe "State" StateSpec.spec
+  describe "Stream" StreamSpec.spec
   describe "Tools" ToolsSpec.spec

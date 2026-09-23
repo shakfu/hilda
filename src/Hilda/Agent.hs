@@ -14,6 +14,7 @@ module Hilda.Agent
   ) where
 
 import Control.Exception (IOException, try)
+import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson (Value (..), eitherDecodeStrict)
 import Data.Bifunctor (first)
@@ -23,6 +24,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
+import Hilda.Context
 import Hilda.Policy
 import Hilda.Tools
 import Hilda.Types
@@ -31,6 +33,7 @@ data Event
   = Narration Text -- ^ Text the model sent alongside tool calls.
   | CallStarted ToolCall
   | CallFinished ToolCall (Either Text Text)
+  | ContextTrimmed Int Int -- ^ Tool results elided, characters removed.
 
 data Hooks m = Hooks
   { onEvent :: Event -> m ()
@@ -43,6 +46,7 @@ data Env m = Env
   , envTools    :: [Tool]
   , envMode     :: Mode
   , envMaxTurns :: Int
+  , envBudget   :: Int -- ^ Context budget in estimated tokens.
   , envHooks    :: Hooks m
   }
 
@@ -54,28 +58,33 @@ data Outcome = Outcome
   , outText    :: Text      -- ^ Final assistant text; empty unless 'Finished'.
   , outTurns   :: Int       -- ^ Model calls made.
   , outUsage   :: Usage
+  , outContext :: Int       -- ^ Prompt tokens of the last model call.
   , outStop    :: Stop
   }
 
 -- | Append a user prompt to the history and run until the model stops.
 runTurn :: MonadIO m => Env m -> [Message] -> Text -> m Outcome
-runTurn env history prompt = go 0 mempty (history <> [User prompt])
+runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
   where
     specs = map toolSpec (visibleTools (envMode env) (envTools env))
-    go n usage hist
-      | n >= envMaxTurns env = pure (Outcome hist "" n usage TurnLimit)
-      | otherwise =
-          liftIO (envComplete env (Request (envModel env) hist specs)) >>= \case
-            Left err -> pure (Outcome hist "" n usage (Failed err))
+    go n usage ctx unfitted
+      | n >= envMaxTurns env = pure (Outcome unfitted "" n usage ctx TurnLimit)
+      | otherwise = do
+          let (hist, elided, chars) = fitContext (envBudget env) unfitted
+          when (elided > 0) (onEvent (envHooks env) (ContextTrimmed elided chars))
+          liftIO (envComplete env (const (pure ())) (Request (envModel env) hist specs)) >>= \case
+            Left err -> pure (Outcome hist "" n usage ctx (Failed err))
             Right (Reply text calls used) -> do
               let hist' = hist <> [Assistant text calls]
                   usage' = usage <> used
+                  -- Providers that report no usage get the estimate.
+                  ctx' = if usagePrompt used > 0 then usagePrompt used else historyTokens hist
               if null calls
-                then pure (Outcome hist' (fromMaybe "" text) (n + 1) usage' Finished)
+                then pure (Outcome hist' (fromMaybe "" text) (n + 1) usage' ctx' Finished)
                 else do
                   traverse_ (onEvent (envHooks env) . Narration) text
                   results <- traverse (dispatch env) calls
-                  go (n + 1) usage' (hist' <> results)
+                  go (n + 1) usage' ctx' (hist' <> results)
 
 -- | Authorise and run one tool call. Every failure becomes a tool result
 -- the model can read, so the loop itself never fails on a tool.

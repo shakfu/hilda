@@ -18,6 +18,8 @@ First release.
 
 - Permission modes via `-M`/`--mode`: `yolo` (default), `ask`, `read-only`. `ask` shows every argument of the call in full, with control characters escaped.
 
+- Streamed replies over server-sent events. The REPL prints text as it arrives; `--stream-json` emits `text_delta` events. A stream with no data for 300 s fails.
+
 - Headless runs with `-p TEXT` or `-p -` (stdin). Output as text, `--json` (one object) or `--stream-json` (one line per event, then the result). Exit codes: 0 finished, 1 error, 2 turn limit.
 
 - REPL with history, slash commands (`/mode`, `/model`, `/tools`, `/system`, `/usage`, `/clear`, `/quit`) and Ctrl-C to cancel a turn.

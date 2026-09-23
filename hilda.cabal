@@ -37,12 +37,14 @@ library
     Hilda.Agent
     Hilda.App
     Hilda.Cli
+    Hilda.Context
     Hilda.Policy
     Hilda.Prompt
     Hilda.Provider
     Hilda.Render
     Hilda.Repl
     Hilda.State
+    Hilda.Stream
     Hilda.Tools
     Hilda.Types
 
@@ -82,6 +84,7 @@ test-suite spec
     RenderSpec
     ReplSpec
     StateSpec
+    StreamSpec
     ToolsSpec
 
   build-depends:

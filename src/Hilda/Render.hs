@@ -7,7 +7,8 @@ module Hilda.Render
   , plain
   , colorEnabled
   , ansiTerminal
-  , withStatus
+  , Live (..)
+  , liveOutput
   , Line (..)
   , renderEvent
   , renderUsage
@@ -20,7 +21,10 @@ module Hilda.Render
   ) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Exception (bracket)
+import Control.Concurrent.MVar (modifyMVar_, newMVar)
+import Control.Exception (finally)
+import Control.Monad (when)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Aeson (Value (..), decodeStrict)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
@@ -66,18 +70,34 @@ colorEnabled h = do
   noColor <- maybe False (not . null) <$> lookupEnv "NO_COLOR"
   (&& not noColor) <$> ansiTerminal h
 
--- | Run an action while a @[waiting Ns]@ line counts up on @h@, then erase
--- the line. The first update comes after one second, so fast calls print
--- nothing but the erase.
-withStatus :: Handle -> Paint -> IO a -> IO a
-withStatus h paint act = bracket (forkIO (tick 1)) stop (const act)
+-- | What a terminal shows during a model call.
+data Live = Live
+  { liveTicker :: Bool -- ^ Count @[waiting Ns]@ until the first text arrives.
+  , liveEcho   :: Bool -- ^ Print reply text as it streams.
+  }
+
+-- | Wrap a backend for terminal output on @h@. The waiting line is erased
+-- once, before the first echoed text; echoed text ends with a newline.
+-- The first tick comes after one second, so fast calls print only the erase.
+liveOutput :: Handle -> Paint -> Live -> Complete -> Complete
+liveOutput h paint live complete sink req = do
+  ticker <- newMVar =<< if liveTicker live then Just <$> forkIO (tick 1) else pure Nothing
+  lastChar <- newIORef Nothing
+  let stop = modifyMVar_ ticker $ \t -> Nothing <$ mapM_ (\tid -> killThread tid >> put "\r\ESC[K") t
+      echo d = when (liveEcho live && not (T.null d)) $ do
+        stop
+        put d
+        writeIORef lastChar (Just (T.last d))
+      finish = do
+        stop
+        readIORef lastChar >>= \c -> when (maybe False (/= '\n') c) (put "\n")
+  complete (\d -> echo d >> sink d) req `finally` finish
   where
+    put t = TIO.hPutStr h t >> hFlush h
     tick n = do
       threadDelay 1000000
-      TIO.hPutStr h ("\r" <> paint Dim ("[waiting " <> tshow (n :: Int) <> "s]"))
-      hFlush h
+      put ("\r" <> paint Dim ("[waiting " <> tshow (n :: Int) <> "s]"))
       tick (n + 1)
-    stop t = killThread t >> TIO.hPutStr h "\r\ESC[K" >> hFlush h
 
 -- | 'Partial' is printed without a newline; the next event completes it.
 data Line = Partial Text | Full Text
@@ -90,6 +110,8 @@ renderEvent paint = \case
   CallStarted c -> Partial (paint Cyan ("[" <> callName c <> "]") <> " " <> callSummary c <> " ")
   CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
   CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> elide 100 e))
+  ContextTrimmed n chars ->
+    Full (paint Dim ("[context: elided " <> tshow n <> " old tool results, ~" <> tshow (chars `div` 4) <> " tokens]"))
 
 -- | The argument that identifies the call (command or path), else the raw
 -- arguments; one line, at most 80 characters.

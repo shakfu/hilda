@@ -7,6 +7,7 @@ import Hilda.Render
 import Hilda.Types
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
+import Data.IORef (modifyIORef, newIORef, readIORef)
 import Test.Hspec
 
 spec :: Spec
@@ -49,16 +50,23 @@ spec = do
     it "shows unparseable arguments verbatim" $
       confirmDetail (ToolCall "c" "bash" "{oops") `shouldBe` "  arguments: {oops"
 
-  describe "withStatus" $ do
-    it "erases the line after a fast action" $ withSystemTempFile "status" $ \path h -> do
-      r <- withStatus h plain (pure 'x')
-      hClose h
-      r `shouldBe` 'x'
-      readFile path `shouldReturn` "\r\ESC[K"
-    it "counts seconds during a slow action" $ withSystemTempFile "status" $ \path h -> do
-      _ <- withStatus h plain (threadDelay 1500000)
-      hClose h
-      readFile path `shouldReturn` "\r[waiting 1s]\r\ESC[K"
+  describe "liveOutput" $ do
+    let reply = Right (Reply Nothing [] mempty)
+        req = Request "m" [] []
+        streams delay = \sink _ -> threadDelay delay >> sink "hel" >> sink "lo" >> pure reply
+        run live backend = withSystemTempFile "live" $ \path h -> do
+          seen <- newIORef []
+          _ <- liveOutput h plain live backend (\d -> modifyIORef seen (d :)) req
+          hClose h
+          (,) <$> readFile path <*> (reverse <$> readIORef seen)
+    it "erases the waiting line before streamed text and ends the line" $
+      run (Live True True) (streams 0) `shouldReturn` ("\r\ESC[Khello\n", ["hel", "lo"])
+    it "counts seconds until the first text" $
+      fmap fst (run (Live True True) (streams 1500000)) `shouldReturn` "\r[waiting 1s]\r\ESC[Khello\n"
+    it "only erases when not echoing" $
+      run (Live True False) (streams 0) `shouldReturn` ("\r\ESC[K", ["hel", "lo"])
+    it "echoes without escape codes when there is no ticker" $
+      fmap fst (run (Live False True) (streams 0)) `shouldReturn` "hello\n"
 
   describe "renderUsage" $ do
     it "omits cost when the provider reports none" $

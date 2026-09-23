@@ -21,7 +21,7 @@ scripted :: [Reply] -> IO (Complete, IO [Request])
 scripted replies = do
   queue <- newIORef replies
   seen <- newIORef []
-  let complete r = do
+  let complete _ r = do
         modifyIORef seen (r :)
         atomicModifyIORef' queue $ \case
           [] -> ([], Left "script exhausted")

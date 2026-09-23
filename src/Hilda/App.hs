@@ -5,6 +5,7 @@ module Hilda.App
   , versionText
   , runHeadless
   , eventJson
+  , deltaJson
   , outcomeJson
   , exitCodeFor
   ) where
@@ -32,6 +33,7 @@ data Config = Config
   , cfgMode     :: Mode
   , cfgSystem   :: Text
   , cfgMaxTurns :: Int
+  , cfgBudget   :: Int -- ^ Context budget in estimated tokens.
   , cfgRemember :: Text -> IO () -- ^ Record the model for the next run.
   }
 
@@ -49,8 +51,12 @@ data Output
 runHeadless :: Config -> Output -> Text -> IO ExitCode
 runHeadless cfg output prompt = do
   paint <- (\on -> if on then ansi else plain) <$> colorEnabled stderr
-  status <- (&& output == Text) <$> ansiTerminal stderr
-  let complete = if status then withStatus stderr paint . cfgComplete cfg else cfgComplete cfg
+  terminal <- ansiTerminal stderr
+  let complete = case output of
+        -- Text mode keeps stdout for the final answer, so it does not echo.
+        Text | terminal -> liveOutput stderr paint (Live True False) (cfgComplete cfg)
+        StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
+        _ -> cfgComplete cfg
   out <- runTurn (env complete (emit paint)) [System (cfgSystem cfg)] prompt
   case output of
     Text -> do
@@ -58,7 +64,7 @@ runHeadless cfg output prompt = do
         Finished  -> TIO.putStrLn (outText out)
         TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
         Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> e)
-      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> "]"))
+      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> "]"))
     _ -> jsonLine (outcomeJson cfg out)
   pure (exitCodeFor (outStop out))
   where
@@ -69,6 +75,7 @@ runHeadless cfg output prompt = do
         , envTools = builtinTools
         , envMode = cfgMode cfg
         , envMaxTurns = cfgMaxTurns cfg
+        , envBudget = cfgBudget cfg
         , envHooks = Hooks {onEvent = onEv, confirm = confirmTty}
         }
     emit paint = case output of
@@ -92,6 +99,10 @@ confirmTty call = do
       hFlush stderr
       isYes . T.pack <$> getLine
 
+-- | Stream-json line for one piece of streamed reply text.
+deltaJson :: Text -> Value
+deltaJson t = object ["type" .= ("text_delta" :: Text), "text" .= t]
+
 -- | Stream-json line for one event. Tool output is truncated as the model sees it.
 eventJson :: Event -> Value
 eventJson = \case
@@ -106,6 +117,8 @@ eventJson = \case
       , "ok" .= either (const False) (const True) r
       , "output" .= truncateMiddle resultLimit (either id id r)
       ]
+  ContextTrimmed n chars ->
+    object ["type" .= ("context_trimmed" :: Text), "results" .= n, "characters" .= chars]
 
 outcomeJson :: Config -> Outcome -> Value
 outcomeJson cfg out =
@@ -118,6 +131,7 @@ outcomeJson cfg out =
         _        -> Nothing
     , "turns" .= outTurns out
     , "usage" .= outUsage out
+    , "context_tokens" .= outContext out
     , "provider" .= kindName (cfgProvider cfg)
     , "model" .= cfgModel cfg
     , "mode" .= modeName (cfgMode cfg)
