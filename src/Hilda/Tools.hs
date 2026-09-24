@@ -31,11 +31,12 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
+import Data.Text.Encoding (decodeUtf8Lenient, decodeUtf8', encodeUtf8)
 import System.Directory
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName)
 import System.IO
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 import System.Posix.Signals (signalProcessGroup, sigKILL)
 import System.Process
 import System.Timeout (timeout)
@@ -44,6 +45,7 @@ import System.Timeout (timeout)
 data Effect = Observe | Mutate | Execute
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
+-- | A tool the model can call.
 data Tool = Tool
   { toolName        :: Text
   , toolDescription :: Text
@@ -62,6 +64,7 @@ toolSpec t =
           ["name" .= toolName t, "description" .= toolDescription t, "parameters" .= toolParams t]
     ]
 
+-- | @read@, @write@, @edit@ and @bash@, in the order offered to the model.
 builtinTools :: [Tool]
 builtinTools = [readTool, writeTool, editTool, bashTool]
 
@@ -78,6 +81,7 @@ schema props required =
 withArgs :: (Object -> Parser a) -> (a -> IO (Either Text Text)) -> Value -> IO (Either Text Text)
 withArgs p k v = either (pure . Left . T.pack) k (parseEither (withObject "arguments" p) v)
 
+-- | Read a text file with line numbers, paged below 'resultLimit'. Refuses binary files.
 readTool :: Tool
 readTool =
   Tool
@@ -106,6 +110,7 @@ readTool =
                 Right out <$ evaluate (T.length out)
     }
 
+-- | Create or replace a file through 'atomicWrite'.
 writeTool :: Tool
 writeTool =
   Tool
@@ -119,6 +124,7 @@ writeTool =
         pure (Right ("wrote " <> tshow (BS.length bytes) <> " bytes to " <> T.pack path))
     }
 
+-- | Exact replacement through 'applyEdit'. Refuses non-UTF-8 files and files over 'editLimit'.
 editTool :: Tool
 editTool =
   Tool
@@ -142,14 +148,16 @@ editTool =
             if size > fromIntegral editLimit
               then pure (Left (T.pack path <> " has " <> tshow size <> " bytes; edit is limited to " <> tshow editLimit <> ", use bash"))
               else do
-                src <- decodeUtf8Lenient <$> BS.readFile path
-                case applyEdit old new replaceAll src of
+                bytes <- BS.readFile path
+                -- A lenient decode would rewrite every invalid byte as U+FFFD.
+                case either (const (Left (T.pack path <> " is not valid UTF-8; use bash"))) Right (decodeUtf8' bytes) >>= applyEdit old new replaceAll of
                   Left err -> pure (Left err)
                   Right out -> do
                     atomicWrite path (encodeUtf8 out)
                     pure (Right ("edited " <> T.pack path))
     }
 
+-- | Run @bash -c@. The default timeout is 120 s; on timeout the process group is killed.
 bashTool :: Tool
 bashTool =
   Tool
@@ -201,6 +209,7 @@ runShell secs cmd = do
         Nothing -> kill >> pure Nothing
         Just (out, code) -> pure (Just (code, decodeUtf8Lenient out))
 
+-- | Bytes of @bash@ output kept; the rest is read and discarded.
 captureLimit :: Int
 captureLimit = 1024 * 1024
 
@@ -217,8 +226,8 @@ readCapped limit h = go 0 []
           let keep = BS.take (limit - n) chunk
            in go (n + BS.length keep) (if BS.null keep then acc else keep : acc)
 
--- | Write via a temporary file and rename, so a crash never leaves a
--- truncated file. Resolves symlinks first and keeps existing permissions.
+-- | Write via a temporary file and rename, so a process crash never leaves
+-- a truncated file. There is no fsync, so power loss still can. Resolves symlinks first and keeps the existing mode.
 -- The temporary file is created exclusively under a unique name, so a
 -- symlink or a concurrent writer cannot redirect it.
 atomicWrite :: FilePath -> BS.ByteString -> IO ()
@@ -227,12 +236,14 @@ atomicWrite path bytes = do
   let dir = takeDirectory target
   createDirectoryIfMissing True dir
   existed <- doesFileExist target
-  perms <- if existed then Just <$> getPermissions target else pure Nothing
+  mode <- if existed then Just . fileMode <$> getFileStatus target else pure Nothing
   (tmp, h) <- openBinaryTempFileWithDefaultPermissions dir (takeFileName target <> ".hilda-tmp")
   flip onException (hClose h >> removeFile tmp) $ do
+    -- The full mode, set before the content lands: directory's
+    -- setPermissions copies only the owner bits, so a 0600 file became 0644.
+    mapM_ (setFileMode tmp) mode
     BS.hPut h bytes
     hClose h
-    mapM_ (setPermissions tmp) perms
     renameFile tmp target
 
 -- | Characters of tool output sent back to the model per call.

@@ -2,11 +2,14 @@ module ToolsSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson (object, (.=))
+import Data.Bits ((.&.))
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Hilda.Tools
 import System.Directory
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -74,6 +77,27 @@ spec = do
       pathIsSymbolicLink link `shouldReturn` True
       readFile real `shouldReturn` "echo b"
       executable <$> getPermissions real `shouldReturn` True
+
+    it "keeps the full mode of an edited file" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let private = dir </> "secret"
+          script = dir </> "run.sh"
+          mode p = (.&. 0o7777) . fileMode <$> getFileStatus p
+          edit p = toolRun editTool (object ["path" .= p, "old_string" .= ("a" :: String), "new_string" .= ("b" :: String)])
+      writeFile private "k=a"
+      writeFile script "echo a"
+      setFileMode private 0o600
+      setFileMode script 0o755
+      edit private `shouldReturn` Right (T.pack ("edited " <> private))
+      edit script `shouldReturn` Right (T.pack ("edited " <> script))
+      (,) <$> mode private <*> mode script `shouldReturn` (0o600, 0o755)
+
+    it "refuses to edit a file that is not valid UTF-8" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "latin1.txt"
+          bytes = BS.pack [0x78, 0x3d, 0xe9, 0x0a, 0x79, 0x3d, 0x32, 0x0a]
+      BS.writeFile path bytes
+      r <- toolRun editTool (object ["path" .= path, "old_string" .= ("y=2" :: String), "new_string" .= ("y=3" :: String)])
+      r `shouldSatisfy` either (T.isInfixOf "UTF-8") (const False)
+      BS.readFile path `shouldReturn` bytes
 
     it "pages a large file under the result limit" $ withSystemTempDirectory "hilda" $ \dir -> do
       let path = dir </> "big.txt"

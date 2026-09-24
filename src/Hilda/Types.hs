@@ -19,6 +19,7 @@ import Data.Monoid (Sum (..))
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
 
+-- | A function call requested by the model.
 data ToolCall = ToolCall
   { callId   :: Text
   , callName :: Text
@@ -26,13 +27,15 @@ data ToolCall = ToolCall
   }
   deriving stock (Eq, Show)
 
+-- | One chat message.
 data Message
   = System Text
   | User Text
-  | Assistant (Maybe Text) [ToolCall]
+  | Assistant (Maybe Text) [ToolCall] [Value] -- ^ Text, calls, reasoning_details blocks.
   | ToolResult Text Text -- ^ Call id, content.
   deriving stock (Eq, Show)
 
+-- | Token counts and cost of one or more model calls.
 data Usage = Usage
   { usagePrompt     :: !Int
   , usageCompletion :: !Int
@@ -53,9 +56,11 @@ data Reply = Reply
   { replyText  :: Maybe Text
   , replyCalls :: [ToolCall]
   , replyUsage :: Usage
+  , replyReasoning :: [Value] -- ^ reasoning_details blocks, whole and in order.
   }
   deriving stock (Eq, Show)
 
+-- | One chat-completions request, before encoding.
 data Request = Request
   { reqModel    :: Text
   , reqMessages :: [Message]
@@ -96,11 +101,13 @@ instance ToJSON Message where
   toJSON = \case
     System t -> object ["role" .= ("system" :: Text), "content" .= t]
     User t -> object ["role" .= ("user" :: Text), "content" .= t]
-    Assistant t [] -> object ["role" .= ("assistant" :: Text), "content" .= fromMaybe "" t]
-    Assistant t calls ->
-      object ["role" .= ("assistant" :: Text), "content" .= t, "tool_calls" .= calls]
+    Assistant t [] rs -> object (["role" .= ("assistant" :: Text), "content" .= fromMaybe "" t] <> reasoning rs)
+    Assistant t calls rs ->
+      object (["role" .= ("assistant" :: Text), "content" .= t, "tool_calls" .= calls] <> reasoning rs)
     ToolResult i t ->
       object ["role" .= ("tool" :: Text), "tool_call_id" .= i, "content" .= t]
+    where
+      reasoning rs = ["reasoning_details" .= rs | not (null rs)]
 
 instance ToJSON Usage where
   toJSON u =

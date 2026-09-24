@@ -29,7 +29,7 @@ import Data.Aeson (Value (..), decodeStrict)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Text (encodeToLazyText)
-import Data.Char (isControl)
+import Data.Char (GeneralCategory (Format), generalCategory, isControl)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -43,11 +43,14 @@ import System.Environment (lookupEnv)
 import System.IO (Handle, hFlush, hIsTerminalDevice)
 import Text.Printf (printf)
 
+-- | The colors hilda uses.
 data Color = Dim | Red | Cyan | BoldMagenta
   deriving stock (Eq, Show)
 
+-- | Wrap text in a color, or leave it plain.
 type Paint = Color -> Text -> Text
 
+-- | 'Paint' with ANSI escape codes.
 ansi :: Paint
 ansi c t = "\ESC[" <> code c <> "m" <> t <> "\ESC[0m"
   where
@@ -57,6 +60,7 @@ ansi c t = "\ESC[" <> code c <> "m" <> t <> "\ESC[0m"
       Cyan -> "36"
       BoldMagenta -> "1;35"
 
+-- | 'Paint' that ignores the color.
 plain :: Paint
 plain _ t = t
 
@@ -117,6 +121,7 @@ renderEvent paint = \case
   CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
   CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> elide 100 e))
   CostUnknown -> Full (paint Red "[--max-cost has no effect: the provider reports no cost]")
+  ReasoningDropped -> Full (paint Red "[the provider rejected the kept reasoning; resending without it]")
   ContextTrimmed n chars ->
     Full (paint Dim ("[context: elided " <> tshow n <> " old tool message" <> (if n == 1 then "" else "s") <> ", ~" <> tshow (chars `div` 4) <> " tokens]"))
 
@@ -134,6 +139,7 @@ callSummary c = elide 80 . visible $ (fromMaybe (callArgs c) (primary =<< decode
 estimateTokens :: Text -> Int
 estimateTokens r = (T.length (truncateMiddle resultLimit r) + 3) `div` 4
 
+-- | Token counts and cost, e.g. @12000 in (9000 cached) / 300 out, $0.0120@.
 renderUsage :: Usage -> Text
 renderUsage u =
   tshow (usagePrompt u) <> " in" <> cached <> " / " <> tshow (usageCompletion u) <> " out"
@@ -163,16 +169,19 @@ confirmDetail c = case decodeStrict (encodeUtf8 (callArgs c)) of
       _ -> visible (TL.toStrict (encodeToLazyText v))
     indent = T.intercalate "\n    " . T.splitOn "\n"
 
+-- | The question after 'confirmDetail'. The default answer is no.
 confirmQuestion :: ToolCall -> Text
 confirmQuestion c = "allow [" <> callName c <> "]? [y/N] "
 
--- | Escape control characters other than newline and tab.
+-- | Escape control characters other than newline and tab, and invisible
+-- format characters such as bidi overrides, which can reorder a command.
 visible :: Text -> Text
 visible = T.concatMap $ \ch ->
-  if isControl ch && ch /= '\n' && ch /= '\t'
+  if (isControl ch || generalCategory ch == Format) && ch /= '\n' && ch /= '\t'
     then T.pack (printf "\\x%02x" (fromEnum ch))
     else T.singleton ch
 
+-- | Accept @y@ or @yes@, in any case.
 isYes :: Text -> Bool
 isYes t = T.toLower (T.strip t) `elem` ["y", "yes"]
 

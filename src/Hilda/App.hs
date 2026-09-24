@@ -10,6 +10,7 @@ module Hilda.App
   , exitCodeFor
   ) where
 
+import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL
@@ -27,6 +28,7 @@ import Paths_hilda (version)
 import System.Exit (ExitCode (..))
 import System.IO
 
+-- | Settings resolved from options and environment, shared by headless runs and the REPL.
 data Config = Config
   { cfgComplete :: Complete
   , cfgProvider :: ProviderKind
@@ -43,6 +45,7 @@ data Config = Config
 versionText :: Text
 versionText = "hilda agent " <> T.pack (showVersion version)
 
+-- | Output format of a headless run.
 data Output
   = Text       -- ^ Answer on stdout, tool activity on stderr.
   | Json       -- ^ One outcome object on stdout.
@@ -93,7 +96,8 @@ runHeadless cfg output prompt = do
     -- Flush per line: stdout is block-buffered when piped.
     jsonLine v = BL.putStrLn (encode v) >> hFlush stdout
 
--- | Ask on the terminal. Without one (piped stdin, CI) the answer is no.
+-- | Ask on the terminal. Without one (piped stdin, CI), or at end of
+-- input, the answer is no.
 confirmTty :: ToolCall -> IO Bool
 confirmTty call = do
   tty <- hIsTerminalDevice stdin
@@ -103,7 +107,7 @@ confirmTty call = do
       TIO.hPutStrLn stderr (confirmDetail call)
       TIO.hPutStr stderr (confirmQuestion call)
       hFlush stderr
-      isYes . T.pack <$> getLine
+      either (const False) (isYes . T.pack) <$> try @IOException getLine
 
 -- | Stream-json line for one piece of a streamed reply.
 deltaJson :: Delta -> Value
@@ -128,7 +132,9 @@ eventJson = \case
   ContextTrimmed n chars ->
     object ["type" .= ("context_trimmed" :: Text), "results" .= n, "characters" .= chars]
   CostUnknown -> object ["type" .= ("cost_unknown" :: Text)]
+  ReasoningDropped -> object ["type" .= ("reasoning_dropped" :: Text)]
 
+-- | The final @result@ object of @--json@ and @--stream-json@.
 outcomeJson :: Config -> Outcome -> Value
 outcomeJson cfg out =
   object
@@ -154,6 +160,7 @@ outcomeJson cfg out =
       CostLimit -> "cost_limit"
       Failed _  -> "error"
 
+-- | Exit code: 0 finished, 1 error, 2 turn limit, 3 cost limit.
 exitCodeFor :: Stop -> ExitCode
 exitCodeFor = \case
   Finished  -> ExitSuccess

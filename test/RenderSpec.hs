@@ -49,6 +49,9 @@ spec = do
     it "keeps newlines and escapes other control characters" $
       confirmDetail (ToolCall "c" "bash" "{\"command\":\"ls\\rrm x\\necho\"}")
         `shouldBe` "  command: ls\\x0drm x\n    echo"
+    it "escapes invisible format characters such as bidi overrides" $
+      confirmDetail (ToolCall "c" "bash" "{\"command\":\"echo \\u202erm\"}")
+        `shouldBe` "  command: echo \\x202erm"
     it "lists the path first and summarises file content" $
       confirmDetail (ToolCall "c" "write" "{\"content\":\"abc\",\"path\":\"a.txt\"}")
         `shouldBe` "  path: a.txt\n  content: <3 characters>"
@@ -56,7 +59,7 @@ spec = do
       confirmDetail (ToolCall "c" "bash" "{oops") `shouldBe` "  arguments: {oops"
 
   describe "liveOutput" $ do
-    let reply = Right (Reply Nothing [] mempty)
+    let reply = Right (Reply Nothing [] mempty [])
         req = Request "m" [] []
         streams delay = \sink _ -> threadDelay delay >> sink (TextDelta "hel") >> sink (TextDelta "lo") >> pure reply
         run live backend = withSystemTempFile "live" $ \path h -> do

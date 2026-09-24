@@ -18,14 +18,18 @@ import Test.Hspec
 
 -- | A backend that replays canned replies and records every request.
 scripted :: [Reply] -> IO (Complete, IO [Request])
-scripted replies = do
+scripted = scriptedE . map Right
+
+-- | 'scripted' with failures in the script.
+scriptedE :: [Either Text Reply] -> IO (Complete, IO [Request])
+scriptedE replies = do
   queue <- newIORef replies
   seen <- newIORef []
   let complete _ r = do
         modifyIORef seen (r :)
         atomicModifyIORef' queue $ \case
           [] -> ([], Left "script exhausted")
-          (x : xs) -> (xs, Right x)
+          (x : xs) -> (xs, x)
   pure (complete, reverse <$> readIORef seen)
 
 mkEnv :: Complete -> Mode -> Bool -> Env IO
@@ -46,7 +50,7 @@ call :: Text -> Text -> Value -> ToolCall
 call i name args = ToolCall i name (T.pack (BL.unpack (encode args)))
 
 reply :: Maybe Text -> [ToolCall] -> Reply
-reply t cs = Reply t cs (Usage 10 5 0 (Just 0.5))
+reply t cs = Reply t cs (Usage 10 5 0 (Just 0.5)) []
 
 -- | Tool results in the order they were appended.
 toolResults :: [Message] -> [(Text, Text)]
@@ -66,7 +70,39 @@ spec = do
     outStop out `shouldBe` Finished
     outText out `shouldBe` "done"
     outTurns out `shouldBe` 1
-    outHistory out `shouldBe` [System "sys", User "hello", Assistant (Just "done") []]
+    outHistory out `shouldBe` [System "sys", User "hello", Assistant (Just "done") [] []]
+
+  it "keeps a reply's reasoning and sends it with the next request" $ do
+    let r = object ["type" .= ("reasoning.text" :: Text), "text" .= ("t" :: Text)]
+        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r]
+    (complete, requests) <- scripted [first', reply (Just "ok") []]
+    _ <- runTurn (mkEnv complete Yolo True) [] "go"
+    reqs <- requests
+    [rs | Assistant _ _ rs <- reqMessages (reqs !! 1)] `shouldBe` [[r]]
+
+  describe "when the provider rejects kept reasoning" $ do
+    let r = object ["type" .= ("reasoning.encrypted" :: Text), "data" .= ("sig" :: Text)]
+        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r]
+        -- Observed live: the streamed failure, then a non-streamed replay.
+        rejected = Left "Error in $: provider error: Gemini models require OpenRouter reasoning details to be preserved in each request. Please refer to our docs: https:"
+        rejectedRaw = Left "provider error: Provider returned error: Gemini models require OpenRouter reasoning details to be preserved in each request. Please refer to our docs: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#preserving-reasoning-blocks. Upstream error: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Corrupted thought signature.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}"
+        run script = do
+          (complete, requests) <- scriptedE script
+          events <- newIORef []
+          let env = (mkEnv complete Yolo True) {envHooks = Hooks (\e -> modifyIORef events (e :)) (const (pure True))}
+          out <- runTurn env [] "go"
+          (,,) out <$> requests <*> (length . filter (\case ReasoningDropped -> True; _ -> False) <$> readIORef events)
+    it "drops it from the history and resends once" $ do
+      (out, reqs, dropped) <- run [Right first', rejected, Right (reply (Just "ok") [])]
+      outStop out `shouldBe` Finished
+      length reqs `shouldBe` 3
+      [rs | Assistant _ _ rs <- reqMessages (reqs !! 2)] `shouldBe` [[]]
+      dropped `shouldBe` 1
+    it "fails if the resend is rejected too" $ do
+      (out, reqs, dropped) <- run [Right first', rejectedRaw, rejected]
+      outStop out `shouldSatisfy` \case Failed _ -> True; _ -> False
+      length reqs `shouldBe` 3
+      dropped `shouldBe` 1
 
   it "runs tool calls and feeds results back" $ withSystemTempDirectory "hilda" $ \dir -> do
     let path = dir </> "a.txt"
@@ -145,7 +181,7 @@ spec = do
   it "elides old tool results over budget and reports it" $ do
     events <- newIORef []
     (complete, requests) <- scripted [reply (Just "ok") []]
-    let old = [User "a", Assistant Nothing [ToolCall "c1" "read" "{}"], ToolResult "c1" (T.replicate 8000 "x"), Assistant (Just "done") []]
+    let old = [User "a", Assistant Nothing [ToolCall "c1" "read" "{}"] [], ToolResult "c1" (T.replicate 8000 "x"), Assistant (Just "done") [] []]
         env = (mkEnv complete Yolo True) {envBudget = 100}
         hooks = (envHooks env) {onEvent = \case
           ContextTrimmed n _ -> modifyIORef events (n :)
@@ -176,7 +212,7 @@ spec = do
 
   it "warns when a cost limit is set but no cost is reported" $ do
     warned <- newIORef False
-    (complete, _) <- scripted [Reply (Just "ok") [] mempty]
+    (complete, _) <- scripted [Reply (Just "ok") [] mempty []]
     let env = (mkEnv complete Yolo True) {envCostLimit = Just 1}
         hooks = (envHooks env) {onEvent = \case
           CostUnknown -> writeIORef warned True

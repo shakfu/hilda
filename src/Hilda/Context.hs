@@ -1,7 +1,7 @@
 -- | Keeping the conversation within a token budget.
 --
--- Tool results and long tool-call arguments (file contents sent to
--- @write@ or @edit@) make up most of a coding session's history and can be
+-- Tool results, long tool-call arguments (file contents sent to
+-- @write@ or @edit@) and earlier prompts' reasoning make up most of a coding session's history and can be
 -- recovered from disk, so they are elided oldest first. User and assistant
 -- text is kept. Elision is written into the history rather than applied per
 -- request, so the sent prefix stays stable for provider prompt caching.
@@ -28,9 +28,10 @@ historyTokens hist = (sum (map chars hist) + 3) `div` 4
     chars = \case
       System t -> T.length t
       User t -> T.length t
-      Assistant t calls -> maybe 0 T.length t + sum [T.length (callName c) + T.length (callArgs c) | c <- calls]
+      Assistant t calls rs -> maybe 0 T.length t + sum [T.length (callName c) + T.length (callArgs c) | c <- calls] + reasoningChars rs
       ToolResult _ t -> T.length t
 
+-- | Replacement for a tool result of @n@ characters.
 elidedStub :: Int -> Text
 elidedStub n = "[elided to fit the context budget: " <> T.pack (show n) <> " characters; run the tool again if needed]"
 
@@ -49,14 +50,17 @@ fitContext budget hist
   where
     need = 4 * (historyTokens hist - budget * 3 `div` 4)
     lastAssistant = maximum (-1 : [i | (i, Assistant {}) <- indexed])
+    -- Reasoning is dropped only from earlier prompts' replies: providers
+    -- need it unchanged within the current tool loop.
+    lastUser = maximum (-1 : [i | (i, User _) <- indexed])
     indexed = zip [0 :: Int ..] hist
     -- (index, characters saved), oldest first.
-    candidates = [(i, saved) | (i, m) <- indexed, i < lastAssistant, let saved = savedBy m, saved > 0]
-    savedBy = \case
+    candidates = [(i, saved) | (i, m) <- indexed, i < lastAssistant, let saved = savedBy i m, saved > 0]
+    savedBy i = \case
       ToolResult _ t
         | elidedPrefix `T.isPrefixOf` t -> 0
         | otherwise -> T.length t - T.length (elidedStub (T.length t))
-      Assistant _ calls -> sum (map (snd . shrinkArgs . callArgs) calls)
+      Assistant _ calls rs -> sum (map (snd . shrinkArgs . callArgs) calls) + (if i < lastUser then reasoningChars rs else 0)
       _ -> 0
     chosen = cover 0 candidates
     cover _ [] = []
@@ -66,9 +70,15 @@ fitContext budget hist
     picked = IS.fromList (map fst chosen)
     elide i = \case
       ToolResult cid t | i `IS.member` picked -> ToolResult cid (elidedStub (T.length t))
-      Assistant t calls | i `IS.member` picked -> Assistant t [c {callArgs = fst (shrinkArgs (callArgs c))} | c <- calls]
+      Assistant t calls rs | i `IS.member` picked ->
+        Assistant t [c {callArgs = fst (shrinkArgs (callArgs c))} | c <- calls] (if i < lastUser then [] else rs)
       m -> m
 
+-- | Characters of reasoning_details blocks as sent, in JSON.
+reasoningChars :: [Value] -> Int
+reasoningChars = sum . map (fromIntegral . TL.length . encodeToLazyText)
+
+-- | Start of every stub, so elided text is never elided again.
 elidedPrefix :: Text
 elidedPrefix = "[elided to fit the context budget"
 

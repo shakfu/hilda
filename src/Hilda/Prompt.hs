@@ -15,6 +15,7 @@ import Data.Text.Encoding (decodeUtf8Lenient)
 import System.Directory (doesFileExist, doesPathExist)
 import System.FilePath (takeDirectory, (</>))
 
+-- | hilda's instructions, replaced by @--system@ or @--system-file@.
 defaultSystemPrompt :: Text
 defaultSystemPrompt =
   T.unlines
@@ -51,5 +52,6 @@ discoverAgents cwd = do
     chain d = let p = takeDirectory d in if p == d then [d] else d : chain p
     takeWhileInclusive f = foldr (\x acc -> x : if f x then acc else []) []
 
+-- | Read each file as UTF-8, paired with its path.
 loadAgents :: [FilePath] -> IO [(FilePath, Text)]
 loadAgents = traverse (\p -> (,) p . decodeUtf8Lenient <$> BS.readFile p)

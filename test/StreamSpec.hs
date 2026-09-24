@@ -1,6 +1,6 @@
 module StreamSpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Aeson (Key, Value, eitherDecodeStrict, object, (.=))
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Char8 as BS8
 import Data.Foldable (foldlM)
@@ -29,6 +29,26 @@ spec = do
     it "returns nothing for a buffer without a newline" $
       sseData "data: {" `shouldBe` ([], "data: {")
 
+  describe "reasoning_details" $ do
+    let block :: Int -> String -> [(Key, String)] -> Value
+        block i ty fields = object (["index" .= i, "type" .= ty] <> [k .= v | (k, v) <- fields])
+    it "merges the fragments of a block and keeps a late signature" $
+      fmap (replyReasoning . fst)
+        ( fold
+            [ "{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Let \",\"signature\":null,\"id\":\"r1\",\"index\":0}]}}]}"
+            , "{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"me think\",\"signature\":null,\"index\":0}]}}]}"
+            , "{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"signature\":\"sig\",\"index\":0},{\"type\":\"reasoning.encrypted\",\"data\":\"abc\",\"index\":1}]}}]}"
+            ]
+        )
+        `shouldBe` Right
+          [ block 0 "reasoning.text" [("text", "Let me think"), ("signature", "sig"), ("id", "r1")]
+          , block 1 "reasoning.encrypted" [("data", "abc")]
+          ]
+    it "passes entries without an index through, in order" $ do
+      let loose = object ["type" .= ("reasoning.summary" :: String), "summary" .= ("s" :: String)]
+      mergeDetails [loose, block 0 "reasoning.text" [("text", "a")], loose, block 0 "reasoning.text" [("text", "b")]]
+        `shouldBe` [loose, block 0 "reasoning.text" [("text", "ab")], loose]
+
   describe "stepChunk" $ do
     it "joins text deltas and takes usage from the last chunk" $
       fold
@@ -36,7 +56,7 @@ spec = do
         , "{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}"
         , "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"cost\":0.5}}"
         ]
-        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)), [TextDelta "Hel", TextDelta "lo"])
+        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)) [], [TextDelta "Hel", TextDelta "lo"])
 
     it "reads reasoning from reasoning_details" $
       fmap snd (fold ["{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"hmm\"}]}}]}"])
@@ -72,5 +92,8 @@ spec = do
       fmap (replyCalls . fst) (fold ["{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read\"}}]}}]}"])
         `shouldBe` Right [ToolCall "call_0" "read" "{}"]
 
+    it "appends OpenRouter's raw upstream error" $
+      fold ["{\"error\":{\"message\":\"Provider returned error\",\"metadata\":{\"raw\":\"Corrupted thought signature.\\n\"}}}"]
+        `shouldBe` Left "Error in $: provider error: Provider returned error: Corrupted thought signature."
     it "fails on an error chunk" $
       fold ["{\"error\":{\"message\":\"overloaded\"}}"] `shouldBe` Left "Error in $: provider error: overloaded"

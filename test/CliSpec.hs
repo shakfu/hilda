@@ -67,6 +67,11 @@ spec = do
       fmap optCostLimit (parse []) `shouldBe` Just Nothing
       fmap optCostLimit (parse ["--max-cost", "0.5"]) `shouldBe` Just (Just 0.5)
       parse ["--max-cost", "0"] `shouldBe` Nothing
+    it "keeps reasoning only when asked" $ do
+      fmap optKeepReasoning (parse []) `shouldBe` Just False
+      fmap optKeepReasoning (parse ["--keep-reasoning"]) `shouldBe` Just True
+    it "rejects a --max-turns of zero" $
+      parse ["--max-turns", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 

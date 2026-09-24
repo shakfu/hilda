@@ -29,15 +29,18 @@ import System.Environment (getEnvironment)
 import System.Exit (exitFailure, exitWith)
 import System.IO (stderr)
 
+-- | Instructions given inline or as a file path.
 data SystemSource = SystemText Text | SystemFile FilePath
   deriving stock (Eq, Show)
 
+-- | Which AGENTS.md files to load.
 data AgentsSource
   = Discover            -- ^ AGENTS.md from the repository root down to cwd.
-  | Explicit [FilePath]
-  | NoAgents
+  | Explicit [FilePath] -- ^ These files, from @--agents@.
+  | NoAgents            -- ^ None, from @--no-agents@.
   deriving stock (Eq, Show)
 
+-- | Parsed command-line options, before environment resolution.
 data Options = Options
   { optPrompt   :: Maybe Text
   , optOutput   :: Output
@@ -52,9 +55,11 @@ data Options = Options
   , optMaxTurns :: Int
   , optBudget   :: Int
   , optCostLimit :: Maybe Double
+  , optKeepReasoning :: Bool
   }
   deriving stock (Eq, Show)
 
+-- | The option parser, with @--help@, @--version@ and the help footer.
 optionsInfo :: ParserInfo Options
 optionsInfo =
   info (options <**> versionFlag <**> helper) $
@@ -73,6 +78,7 @@ optionsInfo =
   where
     versionFlag = infoOption (T.unpack versionText) (short 'V' <> long "version" <> help "Show version information")
 
+-- | Every option except @--help@ and @--version@.
 options :: Parser Options
 options =
   Options
@@ -102,17 +108,24 @@ options =
             <|> Explicit <$> some (strOption (long "agents" <> metavar "PATH" <> help "Load this AGENTS.md instead of discovering one (repeatable)"))
             <|> pure Discover
         )
-    <*> option auto (long "max-turns" <> metavar "N" <> value 50 <> showDefault <> help "Model calls allowed per prompt")
+    <*> option positive (long "max-turns" <> metavar "N" <> value 50 <> showDefault <> help "Model calls allowed per prompt")
     <*> option
-      (auto >>= \n -> if n > 0 then pure n else readerError "must be positive")
+      positive
       ( long "context-budget" <> metavar "TOKENS" <> value 100000 <> showDefault
           <> help "Elide the oldest tool results when the history exceeds this many tokens (estimated at 4 characters each)"
       )
     <*> optional
       ( option
-          (auto >>= \x -> if x > 0 then pure x else readerError "must be positive")
+          positive
           (long "max-cost" <> metavar "USD" <> help "Stop before the next model call once the prompt (REPL: session) has cost this much. Needs a provider that reports cost")
       )
+    <*> switch
+      ( long "keep-reasoning"
+          <> help "Send reasoning_details back with later requests, as OpenRouter advises for tool calls with reasoning models"
+      )
+  where
+    positive :: (Read a, Num a, Ord a) => ReadM a
+    positive = auto >>= \n -> if n > 0 then pure n else readerError "must be positive"
 
 -- | Pick the backend, key and model. Pure over the environment lookup and
 -- the remembered models, so it is testable.
@@ -143,6 +156,7 @@ resolveProvider env remembered o = do
   where
     nonEmpty = mfilter (not . null) . env
 
+-- | Read the instruction sources and AGENTS.md files and assemble the system prompt.
 systemPrompt :: Options -> IO Text
 systemPrompt o = do
   instructions <- maybe (pure defaultSystemPrompt) readSource (optSystem o)
@@ -158,9 +172,11 @@ systemPrompt o = do
       SystemText t -> pure t
       SystemFile f -> readUtf8 f
 
+-- | Read a file as UTF-8, replacing invalid bytes.
 readUtf8 :: FilePath -> IO Text
 readUtf8 f = decodeUtf8Lenient <$> BS.readFile f
 
+-- | Resolve options and environment, then run headless or start the REPL.
 main :: IO ()
 main = do
   o <- execParser optionsInfo
@@ -170,7 +186,7 @@ main = do
   (provider, model) <-
     either die' pure (resolveProvider (`lookup` env) (\k -> Map.lookup (kindName k) models) o)
   let remember = rememberModel statePath (providerKind provider)
-  complete <- newComplete provider >>= either die' pure
+  complete <- (if optKeepReasoning o then id else withoutReasoning) <$> (newComplete provider >>= either die' pure)
   system <- systemPrompt o
   let cfg =
         Config

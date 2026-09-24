@@ -27,6 +27,8 @@ spec = do
         `shouldBe` map (Just . String) ["text", "tool_call", "tool_result"]
     it "reports context trimming" $
       field "type" (eventJson (ContextTrimmed 2 900)) `shouldBe` Just (String "context_trimmed")
+    it "reports dropped reasoning" $
+      field "type" (eventJson ReasoningDropped) `shouldBe` Just (String "reasoning_dropped")
     it "marks failed tool results" $
       field "ok" (eventJson (CallFinished c (Left "boom"))) `shouldBe` Just (Bool False)
 

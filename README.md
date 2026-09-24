@@ -79,6 +79,12 @@ Each model call resends the whole conversation, so caching the repeated start is
 
 Usage lines show cached tokens, e.g. `12000 in (9000 cached) / 300 out`. `--json` reports them as `cached_tokens`.
 
+## Reasoning
+
+`--keep-reasoning` sends each reply's `reasoning_details` back with later requests. OpenRouter advises this for tool calls with reasoning models ([OpenRouter docs](https://openrouter.ai/docs/use-cases/reasoning-tokens)); without it, the model restarts its reasoning after each tool call. The blocks count toward `--context-budget`. Elision drops them from replies to earlier prompts, never from the current tool loop.
+
+It is off by default. In one test run (2026-09-24), omitting the blocks did not fail on either model tried, and `openai/gpt-6-luna-pro` returned none. Gemini's blocks are thought signatures bound to the upstream that issued them. OpenRouter can route one conversation to Google Vertex and then to Google AI Studio, which rejects Vertex signatures ("Corrupted thought signature"). hilda then drops all kept reasoning from the history, prints `[the provider rejected the kept reasoning; resending without it]` (`reasoning_dropped` in `--stream-json`), and resends once.
+
 Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
 
 Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. It reads `[thinking Ns]` while a reasoning model reasons; the reasoning itself is not printed. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.

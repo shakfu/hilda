@@ -18,6 +18,7 @@ import Hilda.Tools (atomicWrite)
 import System.Directory (XdgDirectory (..), getXdgDirectory)
 import System.FilePath ((</>))
 
+-- | @$XDG_STATE_HOME/hilda/models.json@.
 stateFile :: IO FilePath
 stateFile = (</> "models.json") <$> getXdgDirectory XdgState "hilda"
 
@@ -28,6 +29,7 @@ loadModels path =
     Left _ -> pure Map.empty
     Right bytes -> pure (fromMaybe Map.empty (decodeStrict bytes))
 
+-- | Record the model for a provider, keeping other providers' entries.
 rememberModel :: FilePath -> ProviderKind -> Text -> IO ()
 rememberModel path kind model = do
   models <- loadModels path

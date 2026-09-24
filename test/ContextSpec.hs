@@ -1,5 +1,6 @@
 module ContextSpec (spec) where
 
+import Data.Aeson (Value (..))
 import qualified Data.Text as T
 import Hilda.Context
 import Hilda.Types
@@ -16,11 +17,11 @@ history :: [Message]
 history =
   [ System "sys"
   , User "go"
-  , Assistant Nothing [call "a"]
+  , Assistant Nothing [call "a"] []
   , ToolResult "a" (big 4000)
-  , Assistant Nothing [call "b"]
+  , Assistant Nothing [call "b"] []
   , ToolResult "b" (big 4000)
-  , Assistant Nothing [call "c"]
+  , Assistant Nothing [call "c"] []
   , ToolResult "c" (big 4000)
   ]
 
@@ -59,16 +60,29 @@ spec = do
 
   it "shrinks long arguments of old tool calls" $ do
     let write = ToolCall "w" "write" ("{\"path\":\"a.txt\",\"content\":\"" <> big 4000 <> "\"}")
-        hist = [User "go", Assistant Nothing [write], ToolResult "w" "wrote", Assistant (Just "done") [], User "again", Assistant Nothing [call "r"], ToolResult "r" "x"]
+        hist = [User "go", Assistant Nothing [write] [], ToolResult "w" "wrote", Assistant (Just "done") [] [], User "again", Assistant Nothing [call "r"] [], ToolResult "r" "x"]
         (out, n, _) = fitContext 100 hist
     n `shouldBe` 1
-    [callArgs c | Assistant _ cs <- take 2 out, c <- cs]
+    [callArgs c | Assistant _ cs _ <- take 2 out, c <- cs]
       `shouldBe` ["{\"content\":\"[elided to fit the context budget: 4000 characters]\",\"path\":\"a.txt\"}"]
 
   it "keeps the arguments of the last assistant message" $ do
     let write = ToolCall "w" "write" ("{\"content\":\"" <> big 4000 <> "\"}")
-        hist = [User "go", Assistant Nothing [write], ToolResult "w" "wrote"]
+        hist = [User "go", Assistant Nothing [write] [], ToolResult "w" "wrote"]
     fitContext 10 hist `shouldBe` (hist, 0, 0)
+
+  it "counts reasoning toward the budget" $
+    historyTokens [Assistant Nothing [] [String (big 400)]] `shouldBe` 101
+
+  it "drops reasoning from earlier prompts' replies but keeps it in the current tool loop" $ do
+    let r = String (big 4000)
+        hist =
+          [ User "a", Assistant (Just "x") [] [r]
+          , User "b", Assistant Nothing [call "c"] [r], ToolResult "c" "ok", Assistant Nothing [call "d"] [r], ToolResult "d" "ok"
+          ]
+        (out, n, _) = fitContext 100 hist
+    [rs | Assistant _ _ rs <- out] `shouldBe` [[], [r], [r]]
+    n `shouldBe` 1
 
   it "is idempotent" $ do
     let (once, _, _) = fitContext 1 history

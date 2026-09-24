@@ -13,6 +13,7 @@ module Hilda.Provider
   , decodeReply
   , newComplete
   , newCompleteWith
+  , withoutReasoning
   , retryableStatus
   , retryableError
   ) where
@@ -24,19 +25,23 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import Data.List (dropWhileEnd)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
+import Text.Read (readMaybe)
 import Hilda.Stream
 import Hilda.Types
 import qualified Network.HTTP.Client as H
 import Network.HTTP.Client.TLS (newTlsManagerWith, tlsManagerSettings)
 import Network.HTTP.Types (Header, hContentType, statusCode)
 
+-- | Backend variant. It selects the default base URL, key variable and headers.
 data ProviderKind = OpenAICompatible | OpenRouter
   deriving stock (Eq, Show, Enum, Bounded)
 
+-- | A resolved backend: kind, base URL and key.
 data Provider = Provider
   { providerKind    :: ProviderKind
   , providerBaseUrl :: String
@@ -44,17 +49,21 @@ data Provider = Provider
   }
   deriving stock (Eq, Show)
 
+-- | The name used by @--provider@ and in @models.json@.
 kindName :: ProviderKind -> Text
 kindName OpenAICompatible = "openai"
 kindName OpenRouter       = "openrouter"
 
+-- | Inverse of 'kindName', ignoring case.
 parseKind :: Text -> Maybe ProviderKind
 parseKind t = lookup (T.toLower t) [(kindName k, k) | k <- [minBound .. maxBound]]
 
+-- | Base URL when no override is given.
 defaultBaseUrl :: ProviderKind -> String
 defaultBaseUrl OpenAICompatible = "https://api.openai.com/v1"
 defaultBaseUrl OpenRouter       = "https://openrouter.ai/api/v1"
 
+-- | Environment variable holding the API key, unless @--api-key-env@ names another.
 keyVariable :: ProviderKind -> String
 keyVariable OpenAICompatible = "OPENAI_API_KEY"
 keyVariable OpenRouter       = "OPENROUTER_API_KEY"
@@ -92,10 +101,12 @@ decodeReply = first T.pack . parseEither parser
                 <$> (nonEmpty <$> m .:? "content")
                 <*> m .:? "tool_calls" .!= []
                 <*> o .:? "usage" .!= mempty
+                <*> m .:? "reasoning_details" .!= []
     nonEmpty = \case
       Just t | not (T.null (T.strip t)) -> Just t
       _ -> Nothing
 
+-- | Request headers. OpenRouter also gets @X-Title@ for attribution.
 headers :: Provider -> [Header]
 headers p =
   [("Content-Type", "application/json")]
@@ -103,6 +114,11 @@ headers p =
     <> case providerKind p of
       OpenRouter       -> [("X-Title", "hilda")]
       OpenAICompatible -> []
+
+-- | Drop reasoning_details from replies, so they are neither kept in the
+-- history nor sent back.
+withoutReasoning :: Complete -> Complete
+withoutReasoning complete sink r = fmap (\rep -> rep {replyReasoning = []}) <$> complete sink r
 
 -- | Build a 'Complete' that shares one connection manager across calls.
 -- Fails when the base URL does not parse.
@@ -124,7 +140,8 @@ newCompleteWith idle p =
               }
       pure (Right (\sink r -> send idle mgr (prepare r) sink))
 
-data Attempt = Retry Text | Done (Either Text Reply)
+-- | A retry carries the server's Retry-After, in seconds, if it sent one.
+data Attempt = Retry (Maybe Int) Text | Done (Either Text Reply)
 
 -- | POST with up to three retries, only where the server cannot have run
 -- the request: 429, and connection failures before it was sent. A 5xx or
@@ -141,8 +158,8 @@ send idle mgr req sink = go (0 :: Int)
         Left e
           | n < retries, retryableError e -> backoff n >> go (n + 1)
           | otherwise -> pure (Left (describe e))
-        Right (Retry err)
-          | n < retries -> backoff n >> go (n + 1)
+        Right (Retry after err)
+          | n < retries -> maybe (backoff n) (threadDelay . (* 1000000) . min 60) after >> go (n + 1)
           | otherwise -> pure (Left err)
         Right (Done r) -> pure r
     lost e = pure (Done (Left ("connection lost: " <> T.pack (show e))))
@@ -155,7 +172,7 @@ send idle mgr req sink = go (0 :: Int)
 -- JSON; its text reaches the sink in one piece.
 receive :: Int -> (Delta -> IO ()) -> H.Response H.BodyReader -> IO Attempt
 receive idle sink resp
-  | retryableStatus code = Retry . either id httpError <$> consume
+  | retryableStatus code = Retry retryAfter . either id httpError <$> consume
   | code < 200 || code >= 300 = Done . Left . either id httpError <$> consume
   | streaming = Done <$> readStream idle (H.responseBody resp) sink
   | otherwise = do
@@ -166,6 +183,8 @@ receive idle sink resp
     code = statusCode (H.responseStatus resp)
     consume = readBody idle (H.responseBody resp)
     httpError body = "HTTP " <> T.pack (show code) <> ": " <> decodeUtf8Lenient body
+    -- Only the seconds form; an HTTP date falls back to the backoff.
+    retryAfter = lookup "Retry-After" (H.responseHeaders resp) >>= readMaybe . BS8.unpack
     streaming = maybe False ("text/event-stream" `BS.isPrefixOf`) (lookup hContentType (H.responseHeaders resp))
 
 -- | Seconds without any bytes before a response body counts as stalled.
@@ -177,6 +196,7 @@ idleLimit = 300
 readIdle :: Int -> H.BodyReader -> IO (Maybe BS.ByteString)
 readIdle idle body = timeout (idle * 1000000) (H.brRead body)
 
+-- | Error text for a body idle for @idle@ seconds.
 stalled :: Int -> Text
 stalled idle = "response stalled: no data for " <> T.pack (show idle) <> "s"
 
@@ -210,9 +230,11 @@ readStream idle body sink = loop BS.empty emptyPartial
         Left e -> pure (Left e)
         Right (p', deltas) -> mapM_ sink deltas >> feed ds rest p'
 
+-- | Statuses worth retrying: only 429, since the server did not run the request.
 retryableStatus :: Int -> Bool
 retryableStatus = (== 429)
 
+-- | Connection failures before the request was sent, so nothing was billed.
 retryableError :: H.HttpException -> Bool
 retryableError = \case
   H.HttpExceptionRequest _ (H.ConnectionFailure _) -> True

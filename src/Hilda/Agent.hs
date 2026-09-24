@@ -2,7 +2,7 @@
 -- the results back, repeat until it answers without tool calls.
 --
 -- The loop is polymorphic in its monad. Headless runs use 'IO'; the REPL
--- runs in haskeline's 'InputT' so confirmation prompts share its terminal.
+-- runs in haskeline's 'System.Console.Haskeline.InputT' so confirmation prompts share its terminal.
 module Hilda.Agent
   ( Event (..)
   , Hooks (..)
@@ -29,18 +29,22 @@ import Hilda.Policy
 import Hilda.Tools
 import Hilda.Types
 
+-- | What the loop reports to its caller while a turn runs.
 data Event
   = Narration Text -- ^ Text the model sent alongside tool calls.
-  | CallStarted ToolCall
-  | CallFinished ToolCall (Either Text Text)
+  | CallStarted ToolCall -- ^ After authorisation, before the tool runs.
+  | CallFinished ToolCall (Either Text Text) -- ^ The tool's output or error.
   | ContextTrimmed Int Int -- ^ Tool results elided, characters removed.
   | CostUnknown -- ^ A cost limit is set but the provider reports no cost.
+  | ReasoningDropped -- ^ The provider rejected kept reasoning; resent without it.
 
+-- | How the loop reports events and asks the user.
 data Hooks m = Hooks
   { onEvent :: Event -> m ()
-  , confirm :: ToolCall -> m Bool
+  , confirm :: ToolCall -> m Bool -- ^ Asked on a 'Confirm' verdict; True runs the call.
   }
 
+-- | Everything one turn needs: backend, model, tools, limits and hooks.
 data Env m = Env
   { envComplete :: Complete
   , envModel    :: Text
@@ -53,9 +57,11 @@ data Env m = Env
   , envHooks    :: Hooks m
   }
 
+-- | Why a turn ended.
 data Stop = Finished | TurnLimit | CostLimit | Failed Text
   deriving stock (Eq, Show)
 
+-- | The result of 'runTurn'.
 data Outcome = Outcome
   { outHistory :: [Message] -- ^ Full history, including this turn.
   , outText    :: Text      -- ^ Final assistant text; empty unless 'Finished'.
@@ -79,11 +85,17 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
           let (hist, elided, chars) = fitContext (envBudget env) unfitted
           when (elided > 0) (onEvent (envHooks env) (ContextTrimmed elided chars))
           liftIO (envComplete env (const (pure ())) (Request (envModel env) hist specs)) >>= \case
-            Left err -> pure (Outcome hist "" n usage ctx (Failed err))
-            Right (Reply text calls used) -> do
+            Left err
+              -- Dropped from the whole history: after a reroute it holds
+              -- signatures from two upstreams, and neither accepts both.
+              | rejectsReasoning err && any keepsReasoning hist -> do
+                  onEvent (envHooks env) ReasoningDropped
+                  go n usage ctx (map dropReasoning hist)
+              | otherwise -> pure (Outcome hist "" n usage ctx (Failed err))
+            Right (Reply text calls used reasoning) -> do
               when (n == 0 && isJust (envCostLimit env) && isNothing (usageCost used)) $
                 onEvent (envHooks env) CostUnknown
-              let hist' = hist <> [Assistant text calls]
+              let hist' = hist <> [Assistant text calls reasoning]
                   usage' = usage <> used
                   -- Providers that report no usage get the estimate.
                   ctx' = if usagePrompt used > 0 then usagePrompt used else historyTokens hist
@@ -96,6 +108,24 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
     spentAll usage = case envCostLimit env of
       Just limit -> envSpent env + fromMaybe 0 (usageCost usage) >= limit
       Nothing -> False
+
+-- | A provider refusing reasoning blocks it did not issue. OpenRouter can
+-- route one Gemini conversation to Vertex and then AI Studio, and each
+-- rejects the other's thought signatures.
+rejectsReasoning :: Text -> Bool
+rejectsReasoning err = any (`T.isInfixOf` T.toLower err) ["thought signature", "reasoning details"]
+
+-- | An assistant message carrying reasoning_details blocks.
+keepsReasoning :: Message -> Bool
+keepsReasoning = \case
+  Assistant _ _ (_ : _) -> True
+  _ -> False
+
+-- | The message without its reasoning_details blocks.
+dropReasoning :: Message -> Message
+dropReasoning = \case
+  Assistant t calls _ -> Assistant t calls []
+  m -> m
 
 -- | Authorise and run one tool call. Every failure becomes a tool result
 -- the model can read, so the loop itself never fails on a tool.
@@ -119,6 +149,7 @@ dispatch env call = do
   where
     hooks = envHooks env
 
+-- | Decode the arguments and run the tool. Bad JSON and IO errors become 'Left'.
 runTool :: Tool -> Text -> IO (Either Text Text)
 runTool tool raw = case decodeArgs raw of
   Left err -> pure (Left ("invalid arguments: " <> err))

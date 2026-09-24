@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               hilda
-version:            0.1.0
+version:            0.1.1
 synopsis:           A small coding agent for OpenAI-compatible chat APIs
 description:
   A coding agent for OpenAI-compatible chat-completions servers and
@@ -106,3 +106,4 @@ test-suite spec
     , network
     , optparse-applicative
     , temporary             >=1.3  && <1.4
+    , unix

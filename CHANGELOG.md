@@ -1,16 +1,44 @@
 # Changelog
 
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/).
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/) for the command-line interface; the library modules are internal.
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Added
+
+- `--keep-reasoning` stores each reply's `reasoning_details` and sends them back on later requests, as OpenRouter advises for tool calls with reasoning models. Streamed fragments sharing an `index` are merged into one block, keeping an Anthropic signature that arrives in a final text-less fragment. Blocks count toward `--context-budget`; elision drops them only from replies to earlier prompts, since providers need them unchanged within the current tool loop. Off by default: in a live test, omitting the blocks failed on neither model tried.
+
+  OpenRouter can route one Gemini conversation to Google Vertex and then Google AI Studio, which rejects Vertex signatures as "Corrupted thought signature". On that error hilda drops the kept reasoning from the whole history and resends once, since the history then holds signatures no single upstream accepts. Detection matches the error text; pinning the upstream would avoid the rejection but gives up OpenRouter's failover.
+
+### Changed
+
+- A 429 retry waits for the server's `Retry-After` (seconds form, capped at 60 s) instead of the fixed 1, 2, 4 s backoff.
+
+- `--max-turns` rejects zero and negative values, like `--context-budget` and `--max-cost`.
+
 ### Fixed
+
+- Provider errors include OpenRouter's `metadata.raw`. Before, a non-streamed failure showed only "Provider returned error", without the upstream cause.
+
+- End of input at a headless `ask` confirmation declines the call. Before, `getLine` raised an EOF error that ended the run with no result.
+
+- The REPL prints the `--max-cost has no effect` warning once per session, not on every turn.
+
+- `write` and `edit` keep the full mode of an existing file. Before, a 0600 file came back 0644 (0664 under umask 002), and group and other bits were lost: `directory`'s `setPermissions` copies only the owner bits.
+
+- `edit` refuses a file that is not valid UTF-8. Before, it decoded leniently and wrote every invalid byte back as U+FFFD, so one edit to a Latin-1 file corrupted all its non-ASCII text.
+
+- `ask` confirmations escape Unicode format characters such as U+202E. Before, a bidi override could display a command in a different order than bash runs it.
+
+- The REPL session cost includes calls from turns cancelled with Ctrl-C, and `/clear` no longer resets it. Before, both dropped spent cost, so `--max-cost` could be exceeded.
 
 - A connection reset while a response streams now fails the turn, and the REPL keeps its history. Before, the reset reached `send` as a raw `IOException`. `send` caught only `HttpException`, so the reset killed the process and lost the session. The request is not retried, since the completion may already be billed.
 
 - A non-streaming or error response body that stops sending data now fails after 300 s, like a stream does. Before, it could hang the turn forever. The manager's 600 s response timeout covers only the status and headers.
 
-## [0.1.0] - 2026-09-24
+## [0.1.0]
 
 First release.
 
@@ -46,4 +74,5 @@ First release.
 
 - `-V`/`--version`.
 
+[0.1.1]: https://github.com/shakfu/hilda/releases/tag/v0.1.1
 [0.1.0]: https://github.com/shakfu/hilda/releases/tag/v0.1.0

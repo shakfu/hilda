@@ -23,6 +23,7 @@ data Canned
   = Canned Int BS.ByteString BS.ByteString
   | Reset BS.ByteString
   | Stall BS.ByteString BS.ByteString
+  | RateLimited Int -- ^ A 429 with Retry-After in seconds.
 
 json :: Int -> BS.ByteString -> Canned
 json code = Canned code "application/json"
@@ -86,6 +87,8 @@ readRequest c = go BS.empty
         [] -> 0
 
 render :: Canned -> BS.ByteString
+render (RateLimited secs) =
+  "HTTP/1.1 429 X\r\nRetry-After: " <> BS8.pack (show secs) <> "\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
 render (Reset body) = partial "text/event-stream" body
 render (Stall ctype body) = partial ctype body
 render (Canned code ctype body) =
