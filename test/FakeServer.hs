@@ -17,11 +17,11 @@ import Data.IORef
 import Network.Socket
 import qualified Network.Socket.ByteString as NSB
 
-data Canned = Canned
-  { cannedStatus :: Int
-  , cannedType   :: BS.ByteString
-  , cannedBody   :: BS.ByteString
-  }
+-- | A full response, or a 200 stream cut by a TCP reset after the given
+-- body bytes.
+data Canned
+  = Canned Int BS.ByteString BS.ByteString
+  | Reset BS.ByteString
 
 json :: Int -> BS.ByteString -> Canned
 json code = Canned code "application/json"
@@ -60,7 +60,9 @@ withServer port delay responses act = do
       canned <- atomicModifyIORef' queue $ \case
         (x : xs) -> (xs, x)
         [] -> ([], json 500 "{}")
-      NSB.sendAll c (render canned) `finally` close c
+      case canned of
+        Reset _ -> NSB.sendAll c (render canned) >> setSockOpt c Linger (StructLinger 1 0) >> close c
+        _ -> NSB.sendAll c (render canned) `finally` close c
 
 localhost :: HostAddress
 localhost = tupleToHostAddress (127, 0, 0, 1)
@@ -82,6 +84,13 @@ readRequest c = go BS.empty
         [] -> 0
 
 render :: Canned -> BS.ByteString
+render (Reset body) =
+  BS.concat
+    [ "HTTP/1.1 200 X\r\n"
+    , "Content-Type: text/event-stream\r\n"
+    , "Content-Length: ", BS8.pack (show (BS.length body + 1000)), "\r\n\r\n"
+    , body
+    ]
 render (Canned code ctype body) =
   BS.concat
     [ "HTTP/1.1 ", BS8.pack (show code), " X\r\n"

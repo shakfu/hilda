@@ -126,6 +126,11 @@ spec = do
       ((r, deltas), _) <- serve [Canned 200 "text/event-stream" events]
       r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 0 Nothing))
       deltas `shouldBe` [TextDelta "Hel", TextDelta "lo"]
+    it "fails a stream reset mid-body without retrying" $ do
+      ((r, deltas), n) <- serve [Reset "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n", ok]
+      r `shouldSatisfy` either (T.isPrefixOf "connection lost: ") (const False)
+      deltas `shouldBe` [TextDelta "Hel"]
+      n `shouldBe` 1
     it "passes a plain JSON reply to the sink in one piece" $ do
       ((_, deltas), _) <- serve [ok]
       deltas `shouldBe` [TextDelta "ok"]

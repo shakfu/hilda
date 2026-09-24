@@ -17,7 +17,7 @@ module Hilda.Provider
   ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (try)
+import Control.Exception (IOException, handle, try)
 import System.Timeout (timeout)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -124,13 +124,15 @@ data Attempt = Retry Text | Done (Either Text Reply)
 -- | POST with up to three retries, only where the server cannot have run
 -- the request: 429, and connection failures before it was sent. A 5xx or
 -- response timeout may follow a billed completion, so those fail at once.
+-- A socket error mid-body reaches us as a raw 'IOException', not an
+-- 'H.HttpException'; it fails at once for the same reason.
 send :: H.Manager -> H.Request -> (Delta -> IO ()) -> IO (Either Text Reply)
 send mgr req sink = go (0 :: Int)
   where
     retries = 3
     backoff n = threadDelay (1000000 * 2 ^ n)
     go n =
-      try (H.withResponse req mgr (receive sink)) >>= \case
+      try (handle @IOException lost (H.withResponse req mgr (receive sink))) >>= \case
         Left e
           | n < retries, retryableError e -> backoff n >> go (n + 1)
           | otherwise -> pure (Left (describe e))
@@ -138,6 +140,7 @@ send mgr req sink = go (0 :: Int)
           | n < retries -> backoff n >> go (n + 1)
           | otherwise -> pure (Left err)
         Right (Done r) -> pure r
+    lost e = pure (Done (Left ("connection lost: " <> T.pack (show e))))
     -- Show only the failure, never the request: it carries the API key.
     describe = \case
       H.HttpExceptionRequest _ c -> "request failed: " <> T.pack (show c)

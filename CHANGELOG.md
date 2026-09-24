@@ -2,6 +2,12 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A connection reset while a response streams now fails the turn, and the REPL keeps its history. Before, the reset reached `send` as a raw `IOException`. `send` caught only `HttpException`, so the reset killed the process and lost the session. The request is not retried, since the completion may already be billed.
+
 ## [0.1.0] - 2026-09-24
 
 First release.
