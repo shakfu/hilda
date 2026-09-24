@@ -1,0 +1,161 @@
+Local changes to isocline 1.1.0 from Hackage (MIT, Daan Leijen):
+- src/tty_esc.c: parse xterm modifyOtherKeys, ESC [ 27 ; mods ; key ~, which
+  kitty, WezTerm and Ghostty send for Shift+Enter. Unpatched, isocline stops
+  after two parameters and prints "13~".
+- isocline.cabal, test/: drop the example executable and test suite, so
+  hilda's `cabal build all` and `tests: True` do not build them.
+Delete vendor/ once an upstream release parses the sequence.
+
+diff -ruN isocline-1.1.0/isocline.cabal isocline/isocline.cabal
+--- isocline-1.1.0/isocline.cabal	2001-09-09 04:46:40.000000000 +0300
++++ isocline/isocline.cabal	2026-09-24 20:24:18.035502154 +0300
+@@ -70,30 +70,3 @@
+     , bytestring >=0.9 && <2
+     , text >=0.1 && <3
+   default-language: Haskell2010
+-
+-executable example
+-  main-is: Example.hs
+-  other-modules:
+-      Paths_isocline
+-  hs-source-dirs:
+-      test
+-  build-depends:
+-      base >=3.0 && <5
+-    , bytestring >=0.9 && <2
+-    , isocline
+-    , text >=0.1 && <3
+-  default-language: Haskell2010
+-
+-test-suite test-example
+-  type: exitcode-stdio-1.0
+-  main-is: Example.hs
+-  other-modules:
+-      Paths_isocline
+-  hs-source-dirs:
+-      test
+-  build-depends:
+-      base >=3.0 && <5
+-    , bytestring >=0.9 && <2
+-    , isocline
+-    , text >=0.1 && <3
+-  default-language: Haskell2010
+diff -ruN isocline-1.1.0/src/tty_esc.c isocline/src/tty_esc.c
+--- isocline-1.1.0/src/tty_esc.c	2001-09-09 04:46:40.000000000 +0300
++++ isocline/src/tty_esc.c	2026-09-24 20:24:18.022999707 +0300
+@@ -265,6 +265,14 @@
+     if (!tty_readc_noblock(tty,&peek,esc_timeout)) return KEY_NONE;
+     tty_read_csi_num(tty,&peek,&num2,esc_timeout);
+   }
++  // xterm modifyOtherKeys: ESC [ 27 ; <mods> ; <key> ~  (e.g. shift+enter);
++  // read it as ESC [ <key> ; <mods> u
++  if (peek == ';' && c1 == '[' && num1 == 27) {
++    uint32_t num3 = 1;
++    if (!tty_readc_noblock(tty,&peek,esc_timeout)) return KEY_NONE;
++    tty_read_csi_num(tty,&peek,&num3,esc_timeout);
++    if (peek == '~') { num1 = num3; peek = 'u'; }
++  }
+ 
+   // the final character (we do not allow 'intermediate characters')
+   uint8_t final = peek;
+diff -ruN isocline-1.1.0/test/Example.hs isocline/test/Example.hs
+--- isocline-1.1.0/test/Example.hs	2001-09-09 04:46:40.000000000 +0300
++++ isocline/test/Example.hs	1970-01-01 03:00:00.000000000 +0300
+@@ -1,97 +0,0 @@
+-{- ----------------------------------------------------------------------------
+-  Copyright (c) 2021, Daan Leijen
+-  This is free software; you can redistribute it and/or modify it
+-  under the terms of the MIT License. A copy of the license can be
+-  found in the "LICENSE" file at the root of this distribution.
+----------------------------------------------------------------------------- -}
+-
+-import System.Console.Isocline
+-import Data.List (isPrefixOf)
+-import Data.Char 
+-import Control.Monad( when )
+-
+-main :: IO ()
+-main
+-  = do styleDef "kbd" "gray underline"     -- define a style
+-       styleDef "ic-prompt" "#00A060"      -- or redefine a system style
+-       putFmtLn welcome                 
+-       setHistory "history.txt" 200        -- history
+-       enableAutoTab True                  -- complete as far as possible
+-       interaction
+-  where
+-    welcome = "\n[b]Isocline[/b] sample program:\n" ++
+-              "- Type 'exit' to quit. (or use [kbd]ctrl-d[/]).\n" ++
+-              "- Press [kbd]F1[/] for help on editing commands.\n" ++
+-              "- Use [kbd]shift-tab[/] for multiline input. (or [kbd]ctrl-enter[/], or [kbd]ctrl-j[/])\n" ++
+-              "- Type 'p' (or 'id', 'f', or 'h') followed by tab for completion.\n" ++
+-              "- Type 'fun' or 'int' to see syntax highlighting\n" ++
+-              "- Use [kbd]ctrl-r[/] to search the history.\n"
+-
+-interaction :: IO ()
+-interaction 
+-  = do s <- readlineEx "hαskell" (Just completer) (Just highlighter)
+-       putStrLn $ unlines ["--------",s,"--------"]
+-       if (s == "" || s == "exit") 
+-         then return ()
+-         else interaction
+-
+-
+-----------------------------------------------------------------------------
+--- Tab Completion
+-----------------------------------------------------------------------------       
+-
+-completer :: CompletionEnv -> String -> IO () 
+-completer compl input
+-  = do completeFileName compl input Nothing [".","/usr/local"] [] {-any extension-}
+-       completeWord compl input Nothing wordCompletions
+-  
+-wordCompletions :: String -> [Completion]
+-wordCompletions input0
+-  = let input = map toLower input0
+-    in -- simple completion based on available words
+-       (completionsFor input ["print","printer","println","printsln","prompt"])
+-       ++
+-       -- with display versus replacement
+-       (if (input == "id") 
+-         then map (\(d,r) -> Completion r d "") $    -- Completion replacement display help
+-              [ ("D — (x) => x",       "(x) => x")
+-              , ("Haskell — \\x -> x", "\\x -> x")
+-              , ("Idris — \\x => x",   "\\x => x")
+-              , ("Ocaml — fun x -> x", "fun x -> x")
+-              , ("Koka — fn(x) x",  "fn(x) x")
+-              , ("Rust — |x| x", "|x| x") ]
+-         else []) 
+-       ++
+-       -- add many hello isocline completions; we should generate these lazily!
+-       (if (not (null input) && input `isPrefixOf` "hello_isocline_") 
+-         then map (\i -> completion ("hello_isocline_" ++ show i)) [1..100000]
+-         else [])
+-  
+-
+-----------------------------------------------------------------------------
+--- Syntax highlighting
+--- uses a simple tokenizer but a full fledged one probably needs 
+--- Parsec or regex's for syntax highlighting
+-----------------------------------------------------------------------------       
+-
+-highlighter :: String -> Fmt
+-highlighter input
+-  = tokenize input
+-  where
+-    tokenize [] = []
+-    tokenize s@('/':'/':_)  -- comment    
+-      = let (t,ds) = span (/='\n') s in style "#408700" (plain t) ++ tokenize ds
+-    tokenize s@(c:cs)
+-      | isAlpha c   = let (t,ds) = span isAlpha s
+-                      in (if (t `elem` ["fun","struct","var","val"]) 
+-                            then style "keyword" t   -- builtin style
+-                          else if (t `elem` ["return","if","then","else"]) 
+-                            then style "control" t   -- builtin style
+-                          else if (t `elem` ["int","double","char","void"])
+-                            then style "#00AFAF" t   -- or use specific colors
+-                            else plain t)            -- never lose input, all original characters must be present!
+-                         ++ tokenize ds
+-      | isDigit c   = let (t,ds) = span isDigit s 
+-                      in style "number" t ++ tokenize ds
+-      | otherwise   = plain [c] ++ tokenize cs      -- never lose input
+-

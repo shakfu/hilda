@@ -1,8 +1,8 @@
 -- | The agent loop: call the model, run the tool calls it asks for, feed
 -- the results back, repeat until it answers without tool calls.
 --
--- The loop is polymorphic in its monad. Headless runs use 'IO'; the REPL
--- runs in haskeline's 'System.Console.Haskeline.InputT' so confirmation prompts share its terminal.
+-- The loop runs in any 'MonadIO'. Headless runs and the REPL both use 'IO'
+-- and differ only in their 'Hooks'.
 module Hilda.Agent
   ( Event (..)
   , Hooks (..)
@@ -10,14 +10,13 @@ module Hilda.Agent
   , Stop (..)
   , Outcome (..)
   , runTurn
-  , resultLimit
   ) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson (Value (..), eitherDecodeStrict)
-import Data.Bifunctor (first)
+import Data.Bifunctor (bimap, first)
 import Data.Foldable (find, traverse_)
 import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -144,10 +143,13 @@ dispatch env call = do
           False -> Left "the user declined this tool call"
   onEvent hooks (CallStarted call)
   result <- either (pure . Left) (\tool -> liftIO (runTool tool (callArgs call))) permitted
-  onEvent hooks (CallFinished call result)
-  pure (ToolResult (callId call) (truncateMiddle resultLimit (either ("error: " <>) id result)))
+  -- Cut before the event, so observers see what the model receives.
+  let cut = bimap (truncateMiddle limit) (truncateMiddle limit) result
+  onEvent hooks (CallFinished call cut)
+  pure (ToolResult (callId call) (either ("error: " <>) id cut))
   where
     hooks = envHooks env
+    limit = resultLimitFor (envBudget env)
 
 -- | Decode the arguments and run the tool. Bad JSON and IO errors become 'Left'.
 runTool :: Tool -> Text -> IO (Either Text Text)

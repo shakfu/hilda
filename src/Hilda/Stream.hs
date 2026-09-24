@@ -60,36 +60,33 @@ sseData buf = (payloads, rest)
 
 -- | Fold one chunk into the reply; also return its deltas.
 stepChunk :: Partial -> Value -> Either Text (Partial, [Delta])
-stepChunk p = first T.pack . parseEither (withObject "chunk" chunk)
+stepChunk p v = maybe (first T.pack (parseEither (withObject "chunk" chunk) v)) Left (providerError v)
   where
-    chunk o =
-      o .:? "error" >>= \case
-        Just e -> fail ("provider error: " <> providerError e)
-        Nothing -> do
-          usage <- o .:? "usage"
-          choices <- o .:? "choices" .!= []
-          delta <- case choices of
-            (c : _) -> withObject "choice" (\c' -> c' .:? "delta" .!= KM.empty) c
-            [] -> pure KM.empty
-          content <- delta .:? "content"
-          calls <- traverse callDelta =<< (delta .:? "tool_calls" .!= [])
-          -- Models send reasoning as reasoning_details, a plain reasoning
-          -- string, or both; prefer the details to avoid counting it twice.
-          details <- delta .:? "reasoning_details" .!= []
-          plain <- delta .:? "reasoning"
-          let text = content >>= \t -> if T.null t then Nothing else Just t
-              thought = case [t | Object d <- details, Just (String t) <- [KM.lookup "text" d]] of
-                [] -> plain
-                ts -> Just (T.concat ts)
-          pure
-            ( p
-                { partText = maybe id (:) text (partText p)
-                , partCalls = foldl' mergeCall (partCalls p) calls
-                , partUsage = fromMaybe (partUsage p) usage
-                , partDetails = reverse details <> partDetails p
-                }
-            , [TextDelta t | Just t <- [text]] <> [ReasoningDelta t | Just t <- [thought], not (T.null t)]
-            )
+    chunk o = do
+      usage <- o .:? "usage"
+      choices <- o .:? "choices" .!= []
+      delta <- case choices of
+        (c : _) -> withObject "choice" (\c' -> c' .:? "delta" .!= KM.empty) c
+        [] -> pure KM.empty
+      content <- delta .:? "content"
+      calls <- traverse callDelta =<< (delta .:? "tool_calls" .!= [])
+      -- Models send reasoning as reasoning_details, a plain reasoning
+      -- string, or both; prefer the details to avoid counting it twice.
+      details <- delta .:? "reasoning_details" .!= []
+      plain <- delta .:? "reasoning"
+      let text = content >>= \t -> if T.null t then Nothing else Just t
+          thought = case [t | Object d <- details, Just (String t) <- [KM.lookup "text" d]] of
+            [] -> plain
+            ts -> Just (T.concat ts)
+      pure
+        ( p
+            { partText = maybe id (:) text (partText p)
+            , partCalls = foldl' mergeCall (partCalls p) calls
+            , partUsage = fromMaybe (partUsage p) usage
+            , partDetails = reverse details <> partDetails p
+            }
+        , [TextDelta t | Just t <- [text]] <> [ReasoningDelta t | Just t <- [thought], not (T.null t)]
+        )
 
 -- | One streamed tool-call piece: index, id, name and argument text.
 data CallDelta = CallDelta (Maybe Int) (Maybe Text) (Maybe Text) (Maybe Text)
@@ -164,14 +161,18 @@ mergeDetails frags = go IS.empty frags
       | k `elem` ["text", "summary", "data"], ss@(_ : _) <- [s | o <- os, Just (String s) <- [KM.lookup k o]] = String (T.concat ss)
       | otherwise = v
 
--- | The message of an error object, else its JSON. OpenRouter's message
--- can be a generic "Provider returned error", with the cause in
--- @metadata.raw@, so that is appended.
-providerError :: Value -> String
+-- | The error in a response body, if it is an error object: the message,
+-- else the error's JSON. OpenRouter's message can be a generic "Provider
+-- returned error", with the cause in @metadata.raw@, so that is appended.
+-- Checked before parsing, so the text carries no aeson path prefix.
+providerError :: Value -> Maybe Text
 providerError = \case
-  Object e | Just (String s) <- KM.lookup "message" e -> T.unpack (s <> raw e)
-  v -> TL.unpack (encodeToLazyText v)
+  Object o | Just e <- KM.lookup "error" o, e /= Null -> Just ("provider error: " <> describe e)
+  _ -> Nothing
   where
+    describe = \case
+      Object e | Just (String s) <- KM.lookup "message" e -> s <> raw e
+      v -> TL.toStrict (encodeToLazyText v)
     raw e = case KM.lookup "metadata" e of
       Just (Object m) | Just (String r) <- KM.lookup "raw" m -> ": " <> T.strip r
       _ -> ""

@@ -9,24 +9,29 @@ module Hilda.Provider
   , parseKind
   , defaultBaseUrl
   , keyVariable
+  , efforts
   , encodeRequest
   , decodeReply
   , newComplete
   , newCompleteWith
   , withoutReasoning
+  , endpointsContext
+  , lookupContext
   , retryableStatus
   , retryableError
   ) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, handle, try)
+import Control.Monad (join)
 import System.Timeout (timeout)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.List (dropWhileEnd)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
@@ -34,7 +39,7 @@ import Text.Read (readMaybe)
 import Hilda.Stream
 import Hilda.Types
 import qualified Network.HTTP.Client as H
-import Network.HTTP.Client.TLS (newTlsManagerWith, tlsManagerSettings)
+import Network.HTTP.Client.TLS (newTlsManager, newTlsManagerWith, tlsManagerSettings)
 import Network.HTTP.Types (Header, hContentType, statusCode)
 
 -- | Backend variant. It selects the default base URL, key variable and headers.
@@ -46,6 +51,7 @@ data Provider = Provider
   { providerKind    :: ProviderKind
   , providerBaseUrl :: String
   , providerKey     :: Maybe Text -- ^ Absent for local servers that need none.
+  , providerEffort  :: Maybe Text -- ^ Reasoning effort; one of 'efforts'.
   }
   deriving stock (Eq, Show)
 
@@ -68,11 +74,18 @@ keyVariable :: ProviderKind -> String
 keyVariable OpenAICompatible = "OPENAI_API_KEY"
 keyVariable OpenRouter       = "OPENROUTER_API_KEY"
 
--- | Anthropic models need an explicit cache marker; other providers cache
+-- | Reasoning efforts OpenRouter accepts. Each model supports a subset;
+-- an unsupported one fails at the provider.
+efforts :: [Text]
+efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+-- | The request body, with a reasoning effort if given.
+--
+-- Anthropic models need an explicit cache marker; other providers cache
 -- automatically. OpenRouter moves a top-level marker to the last cacheable
 -- block, so one field covers the whole growing conversation.
-encodeRequest :: ProviderKind -> Request -> Value
-encodeRequest kind r =
+encodeRequest :: ProviderKind -> Maybe Text -> Request -> Value
+encodeRequest kind effort r =
   object $
     [ "model" .= reqModel r
     , "messages" .= reqMessages r
@@ -80,28 +93,29 @@ encodeRequest kind r =
     , "stream_options" .= object ["include_usage" .= True]
     ]
       <> ["cache_control" .= object ["type" .= ("ephemeral" :: Text)] | caches]
+      <> maybe [] reasoning effort
       <> if null (reqTools r) then [] else ["tools" .= reqTools r, "tool_choice" .= ("auto" :: Text)]
   where
     caches = kind == OpenRouter && "anthropic/" `T.isPrefixOf` reqModel r
+    reasoning e = case kind of
+      OpenRouter       -> ["reasoning" .= object ["effort" .= e]]
+      OpenAICompatible -> ["reasoning_effort" .= e]
 
 -- | Decode a chat-completions response body. OpenRouter can report errors
 -- with status 200 and an @error@ object, so that is checked first.
 decodeReply :: Value -> Either Text Reply
-decodeReply = first T.pack . parseEither parser
+decodeReply v = maybe (first T.pack (parseEither parser v)) Left (providerError v)
   where
     parser = withObject "response" $ \o ->
-      o .:? "error" >>= \case
-        Just err -> fail ("provider error: " <> providerError err)
-        Nothing ->
-          o .: "choices" >>= \case
-            [] -> fail "response has no choices"
-            (c : _) -> do
-              m <- c .: "message"
-              Reply
-                <$> (nonEmpty <$> m .:? "content")
-                <*> m .:? "tool_calls" .!= []
-                <*> o .:? "usage" .!= mempty
-                <*> m .:? "reasoning_details" .!= []
+      o .: "choices" >>= \case
+        [] -> fail "response has no choices"
+        (c : _) -> do
+          m <- c .: "message"
+          Reply
+            <$> (nonEmpty <$> m .:? "content")
+            <*> m .:? "tool_calls" .!= []
+            <*> o .:? "usage" .!= mempty
+            <*> m .:? "reasoning_details" .!= []
     nonEmpty = \case
       Just t | not (T.null (T.strip t)) -> Just t
       _ -> Nothing
@@ -120,6 +134,30 @@ headers p =
 withoutReasoning :: Complete -> Complete
 withoutReasoning complete sink r = fmap (\rep -> rep {replyReasoning = []}) <$> complete sink r
 
+-- | The smallest context window among a model's OpenRouter endpoints, in
+-- tokens. The upstream is picked per request, so the smallest must fit.
+endpointsContext :: Value -> Maybe Int
+endpointsContext = parseMaybe $ withObject "response" $ \o -> do
+  d <- o .: "data"
+  eps <- d .: "endpoints"
+  ns <- catMaybes <$> traverse (withObject "endpoint" (.:? "context_length")) eps
+  if null ns then fail "no context length" else pure (minimum ns)
+
+-- | A model's context window from OpenRouter's endpoints route, or Nothing
+-- on any failure or after two seconds. The route is public, so no key is sent.
+lookupContext :: Provider -> Text -> IO (Maybe Int)
+lookupContext p model =
+  case H.parseRequest (dropWhileEnd (== '/') (providerBaseUrl p) <> "/models/" <> T.unpack model <> "/endpoints") of
+    Nothing -> pure Nothing
+    Just req -> do
+      mgr <- newTlsManager
+      r <-
+        timeout 2000000 . handle @IOException (const (pure Nothing)) $
+          either (const Nothing) Just <$> try @H.HttpException (H.httpLbs req mgr)
+      pure $ case join r of
+        Just resp | statusCode (H.responseStatus resp) == 200 -> decode (H.responseBody resp) >>= endpointsContext
+        _ -> Nothing
+
 -- | Build a 'Complete' that shares one connection manager across calls.
 -- Fails when the base URL does not parse.
 newComplete :: Provider -> IO (Either Text Complete)
@@ -136,7 +174,7 @@ newCompleteWith idle p =
             base
               { H.method = "POST"
               , H.requestHeaders = headers p
-              , H.requestBody = H.RequestBodyLBS (encode (encodeRequest (providerKind p) r))
+              , H.requestBody = H.RequestBodyLBS (encode (encodeRequest (providerKind p) (providerEffort p) r))
               }
       pure (Right (\sink r -> send idle mgr (prepare r) sink))
 

@@ -9,7 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Hilda.Agent
 import Hilda.Policy
-import Hilda.Tools (builtinTools)
+import Hilda.Tools (Effect (..), Tool (..), builtinTools, resultLimit)
 import Hilda.Types
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
@@ -37,7 +37,7 @@ mkEnv complete mode answer =
   Env
     { envComplete = complete
     , envModel = "test-model"
-    , envTools = builtinTools
+    , envTools = builtinTools resultLimit
     , envMode = mode
     , envMaxTurns = 10
     , envBudget = 1000000
@@ -104,6 +104,17 @@ spec = do
       length reqs `shouldBe` 3
       dropped `shouldBe` 1
 
+  it "cuts tool results to a quarter of a small budget, as the event shows" $ do
+    let big = Tool "big" "" (object []) Observe (const (pure (Right (T.replicate 5000 "x"))))
+    (complete, _) <- scripted [reply Nothing [call "c" "big" (object [])], reply (Just "ok") []]
+    events <- newIORef []
+    let env = (mkEnv complete Yolo True) {envTools = [big], envBudget = 1000, envHooks = Hooks (\e -> modifyIORef events (e :)) (const (pure True))}
+    out <- runTurn env [] "go"
+    [sent] <- pure [t | ToolResult _ t <- outHistory out]
+    T.length sent `shouldSatisfy` (<= 1100)
+    evs <- readIORef events
+    [r | CallFinished _ (Right r) <- evs] `shouldBe` [sent]
+
   it "runs tool calls and feeds results back" $ withSystemTempDirectory "hilda" $ \dir -> do
     let path = dir </> "a.txt"
     (complete, requests) <- scripted [reply Nothing [writeCall path], reply (Just "ok") []]
@@ -144,6 +155,7 @@ spec = do
                 Narration _ -> record "narration"
                 ContextTrimmed {} -> record "trimmed"
                 CostUnknown -> record "cost unknown"
+                ReasoningDropped -> record "reasoning dropped"
             , confirm = \_ -> record "confirm" >> pure True
             }
     _ <- runTurn (mkEnv complete Ask True) {envHooks = hooks} [] "write it"

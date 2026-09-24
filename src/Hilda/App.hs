@@ -22,7 +22,7 @@ import Hilda.Agent
 import Hilda.Policy
 import Hilda.Render
 import Hilda.Provider (ProviderKind, kindName)
-import Hilda.Tools (builtinTools, truncateMiddle)
+import Hilda.Tools (builtinTools, resultLimitFor)
 import Hilda.Types
 import Paths_hilda (version)
 import System.Exit (ExitCode (..))
@@ -36,7 +36,7 @@ data Config = Config
   , cfgMode     :: Mode
   , cfgSystem   :: Text
   , cfgMaxTurns :: Int
-  , cfgBudget   :: Int -- ^ Context budget in estimated tokens.
+  , cfgBudget   :: Text -> IO Int -- ^ Context budget for a model, in estimated tokens.
   , cfgCostLimit :: Maybe Double -- ^ Spending limit in credits (USD on OpenRouter).
   , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
   }
@@ -55,6 +55,7 @@ data Output
 -- | Run one prompt to completion and return the exit code.
 runHeadless :: Config -> Output -> Text -> IO ExitCode
 runHeadless cfg output prompt = do
+  budget <- cfgBudget cfg (cfgModel cfg)
   paint <- (\on -> if on then ansi else plain) <$> colorEnabled stderr
   terminal <- ansiTerminal stderr
   let complete = case output of
@@ -62,7 +63,7 @@ runHeadless cfg output prompt = do
         Text | terminal -> liveOutput stderr paint (Live True False) (cfgComplete cfg)
         StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
         _ -> cfgComplete cfg
-  out <- runTurn (env complete (emit paint)) [System (cfgSystem cfg)] prompt
+  out <- runTurn (env budget complete (emit paint)) [System (cfgSystem cfg)] prompt
   when (outTurns out > 0) (cfgRemember cfg (cfgModel cfg))
   case output of
     Text -> do
@@ -75,14 +76,14 @@ runHeadless cfg output prompt = do
     _ -> jsonLine (outcomeJson cfg out)
   pure (exitCodeFor (outStop out))
   where
-    env complete onEv =
+    env budget complete onEv =
       Env
         { envComplete = complete
         , envModel = cfgModel cfg
-        , envTools = builtinTools
+        , envTools = builtinTools (resultLimitFor budget)
         , envMode = cfgMode cfg
         , envMaxTurns = cfgMaxTurns cfg
-        , envBudget = cfgBudget cfg
+        , envBudget = budget
         , envCostLimit = cfgCostLimit cfg
         , envSpent = 0
         , envHooks = Hooks {onEvent = onEv, confirm = confirmTty}
@@ -127,7 +128,7 @@ eventJson = \case
       , "id" .= callId c
       , "name" .= callName c
       , "ok" .= either (const False) (const True) r
-      , "output" .= truncateMiddle resultLimit (either id id r)
+      , "output" .= either id id r
       ]
   ContextTrimmed n chars ->
     object ["type" .= ("context_trimmed" :: Text), "results" .= n, "characters" .= chars]

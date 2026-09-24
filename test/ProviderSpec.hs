@@ -25,13 +25,22 @@ spec :: Spec
 spec = do
   describe "encodeRequest" $ do
     it "asks for a stream and omits tools when there are none" $
-      keys (encodeRequest OpenAICompatible (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
+      keys (encodeRequest OpenAICompatible Nothing (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
     it "sends tools with tool_choice auto" $ do
-      let v = encodeRequest OpenAICompatible (Request "m" [] [object []])
+      let v = encodeRequest OpenAICompatible Nothing (Request "m" [] [object []])
       keys v `shouldMatchList` ["model", "messages", "stream", "stream_options", "tools", "tool_choice"]
 
+  describe "reasoning effort" $ do
+    let field kind k = KM.lookup k =<< (\case Object o -> Just o; _ -> Nothing) (encodeRequest kind (Just "high") (Request "m" [] []))
+    it "sends reasoning.effort to OpenRouter" $
+      field OpenRouter "reasoning" `shouldBe` Just (object ["effort" .= ("high" :: String)])
+    it "sends reasoning_effort to OpenAI-compatible servers" $
+      field OpenAICompatible "reasoning_effort" `shouldBe` Just (String "high")
+    it "sends neither without an effort" $
+      keys (encodeRequest OpenRouter Nothing (Request "m" [] [])) `shouldNotContain` ["reasoning"]
+
   describe "cache_control" $ do
-    let has kind model = "cache_control" `elem` keys (encodeRequest kind (Request model [] []))
+    let has kind model = "cache_control" `elem` keys (encodeRequest kind Nothing (Request model [] []))
     it "marks Anthropic models on OpenRouter" $
       has OpenRouter "anthropic/claude-x" `shouldBe` True
     it "leaves other models and providers alone" $ do
@@ -39,6 +48,13 @@ spec = do
       has OpenAICompatible "anthropic/claude-x" `shouldBe` False
 
   describe "message encoding" $ do
+    it "reads messages back from the wire format" $ do
+      let msgs =
+            [ System "s", User "u"
+            , Assistant (Just "t") [ToolCall "c1" "read" "{\"path\":\"x\"}"] [object ["type" .= ("reasoning.text" :: String)]]
+            , ToolResult "c1" "out", Assistant (Just "done") [] [], Assistant Nothing [] []
+            ]
+      eitherDecode (encode msgs) `shouldBe` Right msgs
     it "encodes assistant tool calls in wire format" $
       toJSON (Assistant Nothing [ToolCall "c1" "read" "{\"path\":\"x\"}"] [])
         `shouldBe` object
@@ -92,7 +108,7 @@ spec = do
         `shouldBe` Right (Reply Nothing [ToolCall "a" "bash" "{\"command\":\"ls\"}"] mempty [])
     it "reports an error object returned with status 200" $
       replyFrom "{\"error\":{\"message\":\"rate limited\",\"code\":429}}"
-        `shouldSatisfy` either (T.isInfixOf "rate limited") (const False)
+        `shouldBe` Left "provider error: rate limited"
     it "rejects a response without choices" $
       replyFrom "{\"choices\":[]}" `shouldSatisfy` isLeft
 
@@ -106,7 +122,7 @@ spec = do
   describe "send" $ do
     let ok = json 200 "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"
         call port = do
-          Right complete <- newCompleteWith 1 (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing)
+          Right complete <- newCompleteWith 1 (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing Nothing)
           seen <- newIORef []
           r <- complete (\d -> modifyIORef seen (d :)) (Request "m" [User "hi"] [])
           (,) r . reverse <$> readIORef seen
@@ -165,9 +181,27 @@ spec = do
       ((_, deltas), _) <- serve [ok]
       deltas `shouldBe` [TextDelta "ok"]
 
+  describe "context windows" $ do
+    let endpoints = "{\"data\":{\"id\":\"a/m\",\"endpoints\":[{\"context_length\":200000},{\"context_length\":128000},{\"context_length\":null}]}}"
+        lookupAt port = lookupContext (Provider OpenRouter ("http://127.0.0.1:" <> show port <> "/api/v1") Nothing Nothing) "a/m"
+    it "takes the smallest window among endpoints" $
+      (endpointsContext =<< decode (BL.pack endpoints)) `shouldBe` Just 128000
+    it "has none when no endpoint reports one" $
+      (endpointsContext =<< decode "{\"data\":{\"endpoints\":[]}}") `shouldBe` Nothing
+    it "looks the window up over HTTP" $ do
+      port <- freePort
+      (r, _) <- withServer port 0 [json 200 (BL.toStrict (BL.pack endpoints))] (lookupAt port)
+      r `shouldBe` Just 128000
+    it "has none for an unknown model or an unreachable server" $ do
+      port <- freePort
+      (r, _) <- withServer port 0 [json 404 "{}"] (lookupAt port)
+      r `shouldBe` Nothing
+      dead <- freePort
+      lookupAt dead `shouldReturn` Nothing
+
   describe "newComplete" $
     it "rejects a base URL that does not parse" $ do
-      r <- newComplete (Provider OpenAICompatible "not a url" Nothing)
+      r <- newComplete (Provider OpenAICompatible "not a url" Nothing Nothing)
       either Just (const Nothing) r `shouldBe` Just "invalid base URL: not a url"
 
   describe "parseKind" $

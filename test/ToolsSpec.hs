@@ -44,6 +44,10 @@ spec = do
     it "reports an offset past the end" $
       numberLines 1000 9 5 ls `shouldBe` "(no lines at offset 9; the file is shorter)"
 
+  describe "resultLimitFor" $
+    it "gives a quarter of the budget, at most resultLimit" $
+      map resultLimitFor [100000, 6000] `shouldBe` [resultLimit, 6000]
+
   describe "truncateMiddle" $ do
     it "keeps short text" $ truncateMiddle 10 "abc" `shouldBe` "abc"
     it "keeps head and tail of long text" $ do
@@ -58,7 +62,7 @@ spec = do
         `shouldReturn` Right ("wrote 8 bytes to " <> T.pack path)
       toolRun editTool (object ["path" .= path, "old_string" .= ("two" :: String), "new_string" .= ("2" :: String)])
         `shouldReturn` Right ("edited " <> T.pack path)
-      toolRun readTool (object ["path" .= path]) `shouldReturn` Right "1\tone\n2\t2\n"
+      toolRun (readTool resultLimit) (object ["path" .= path]) `shouldReturn` Right "1\tone\n2\t2\n"
 
     it "leaves the file untouched when an edit fails" $ withSystemTempDirectory "hilda" $ \dir -> do
       let path = dir </> "f.txt"
@@ -102,8 +106,15 @@ spec = do
     it "pages a large file under the result limit" $ withSystemTempDirectory "hilda" $ \dir -> do
       let path = dir </> "big.txt"
       writeFile path (unlines (replicate 100000 (replicate 50 'x')))
-      Right out <- toolRun readTool (object ["path" .= path])
+      Right out <- toolRun (readTool resultLimit) (object ["path" .= path])
       T.length out `shouldSatisfy` (< resultLimit)
+      out `shouldSatisfy` T.isInfixOf "continue with offset="
+
+    it "pages a large file under a small result limit" $ withSystemTempDirectory "hilda" $ \dir -> do
+      let path = dir </> "big.txt"
+      writeFile path (unlines (replicate 1000 (replicate 50 'x')))
+      Right out <- toolRun (readTool 2000) (object ["path" .= path])
+      T.length out `shouldSatisfy` (<= 2000)
       out `shouldSatisfy` T.isInfixOf "continue with offset="
 
     it "refuses to edit files over the size limit" $ withSystemTempDirectory "hilda" $ \dir -> do
@@ -132,7 +143,7 @@ spec = do
     it "refuses to read binary files" $ withSystemTempDirectory "hilda" $ \dir -> do
       let path = dir </> "bin"
       writeFile path "a\0b"
-      r <- toolRun readTool (object ["path" .= path])
+      r <- toolRun (readTool resultLimit) (object ["path" .= path])
       r `shouldSatisfy` either (T.isInfixOf "binary") (const False)
 
   describe "bash" $ do

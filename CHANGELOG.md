@@ -4,6 +4,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ## [Unreleased]
 
+### Added
+
+- `--reasoning EFFORT` asks the model to reason, sent as `reasoning.effort` to OpenRouter and `reasoning_effort` to the `openai` provider. Values are OpenRouter's: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Without it, Anthropic models do not reason, so `--keep-reasoning` had nothing to keep for them.
+
+- `-c`/`--continue` resumes the last REPL session in the working directory. The REPL saves its history after each turn and `/clear`, not only on exit, so a closed terminal or a stray Ctrl-D loses at most the current turn. Files are per directory under `$XDG_STATE_HOME/hilda/sessions/`, in a 0700 directory since transcripts hold file contents. Per-directory files, not one shared file, avoid lost updates between REPLs in different projects.
+
+- Without `--context-budget`, the budget on OpenRouter is half the model's context window, at most 100,000. The window comes from OpenRouter's endpoints route, as the smallest among the model's upstreams, and is cached in `$XDG_STATE_HOME/hilda/contexts.json`. Half leaves room for the reply and for undercounting at 4 characters per token. A model with a 128k window now gets 64,000, not 100,000. Other providers keep 100,000, since they have no common way to report the window. `/model` in the REPL recomputes the budget for the new model; an explicit `--context-budget` is kept.
+
+- Multi-line prompts in the REPL: Shift+Enter or Ctrl+J starts a new line, and pasted text stays one prompt. The line editor is now isocline, not haskeline, which reads single lines only. isocline 1.1.0 stops after two parameters of xterm's `ESC [ 27 ; mods ; key ~`, which kitty, WezTerm and Ghostty send for Shift+Enter, so hilda vendors it with an 8-line parser fix (`vendor/isocline.patch`) until upstream parses the sequence. Ctrl-C at an `ask` confirmation now declines the call instead of abandoning the turn. The binary no longer links libtinfo.
+
+- CI on GitHub Actions: build, tests, and a Haddock coverage check that fails below 100%.
+
+### Changed
+
+- Each tool result is limited to a quarter of `--context-budget` (in characters, at 4 per token), at most the previous 30,000. Before, one read could exceed a small budget. In a live run at 6000 tokens, elision then thrashed: the model re-read elided files, asked for files that do not exist and hit `--max-turns`. A quarter, not a half, because elision never touches the newest results, and three parallel results still fit in the three quarters it trims to. Rejecting small budgets would be simpler, but would exclude 8k-context local models.
+
+### Fixed
+
+- Provider errors no longer start with aeson's path prefix (`Error in $: provider error: ...`). The error object is now checked before the body is parsed.
+
 ## [0.1.1]
 
 ### Added

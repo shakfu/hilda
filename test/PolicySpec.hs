@@ -18,8 +18,8 @@ spec = do
     authorize ReadOnly Observe `shouldBe` Allow
     map (authorize ReadOnly) [Mutate, Execute] `shouldSatisfy` all isDeny
   it "offers only permitted tools" $ do
-    map toolName (visibleTools Yolo builtinTools) `shouldBe` ["read", "write", "edit", "bash"]
-    map toolName (visibleTools Ask builtinTools) `shouldBe` ["read", "write", "edit", "bash"]
-    map toolName (visibleTools ReadOnly builtinTools) `shouldBe` ["read"]
+    map toolName (visibleTools Yolo (builtinTools resultLimit)) `shouldBe` ["read", "write", "edit", "bash"]
+    map toolName (visibleTools Ask (builtinTools resultLimit)) `shouldBe` ["read", "write", "edit", "bash"]
+    map toolName (visibleTools ReadOnly (builtinTools resultLimit)) `shouldBe` ["read"]
   it "parses every mode name" $
     map (parseMode . modeName) [minBound .. maxBound] `shouldBe` map Just [minBound .. maxBound]

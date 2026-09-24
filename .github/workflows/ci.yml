@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: sudo apt-get update && sudo apt-get install -y libgmp-dev
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.10.3"
+          cabal-version: "3.16"
+
+      # The plan is fixed by index-state in cabal.project, so it keys the cache.
+      - run: cabal build all --dry-run
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-
+
+      - run: cabal build all
+
+      - run: cabal test --test-show-details=direct
+
+      - name: Haddock coverage
+        run: |
+          cabal haddock lib:hilda 2>&1 | tee haddock.log
+          # Only hilda's modules: vendor/isocline's docs may be built too.
+          if grep -E "^ *[0-9]+% .* in 'Hilda\." haddock.log | grep -v '100%'; then
+            echo "Haddock coverage dropped below 100%" >&2
+            exit 1
+          fi

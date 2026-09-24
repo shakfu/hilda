@@ -1,4 +1,5 @@
-packages: .
+-- vendor/isocline: isocline 1.1.0 with a Shift+Enter fix; see vendor/isocline.patch.
+packages: . vendor/isocline
 
 with-compiler: ghc-9.10.3
 

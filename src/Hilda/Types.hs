@@ -17,6 +17,7 @@ import Data.Aeson.Text (encodeToLazyText)
 import Data.Maybe (fromMaybe)
 import Data.Monoid (Sum (..))
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 
 -- | A function call requested by the model.
@@ -108,6 +109,25 @@ instance ToJSON Message where
       object ["role" .= ("tool" :: Text), "tool_call_id" .= i, "content" .= t]
     where
       reasoning rs = ["reasoning_details" .= rs | not (null rs)]
+
+-- | Reads the wire format back, for saved sessions. Blank assistant text
+-- reads as absent, as in a decoded reply.
+instance FromJSON Message where
+  parseJSON = withObject "Message" $ \o ->
+    o .: "role" >>= \case
+      "system" -> System <$> o .: "content"
+      "user" -> User <$> o .: "content"
+      "assistant" ->
+        Assistant
+          <$> (nonBlank <$> o .:? "content")
+          <*> o .:? "tool_calls" .!= []
+          <*> o .:? "reasoning_details" .!= []
+      "tool" -> ToolResult <$> o .: "tool_call_id" <*> o .: "content"
+      role -> fail ("unknown role: " <> T.unpack role)
+    where
+      nonBlank = \case
+        Just t | not (T.null (T.strip t)) -> Just t
+        _ -> Nothing
 
 instance ToJSON Usage where
   toJSON u =

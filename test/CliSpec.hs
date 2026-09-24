@@ -60,8 +60,8 @@ spec = do
     it "accepts -M for --mode" $
       fmap optMode (parse ["-M", "ask"]) `shouldBe` Just Ask
     it "parses --context-budget and rejects zero" $ do
-      fmap optBudget (parse []) `shouldBe` Just 100000
-      fmap optBudget (parse ["--context-budget", "8000"]) `shouldBe` Just 8000
+      fmap optBudget (parse []) `shouldBe` Just Nothing
+      fmap optBudget (parse ["--context-budget", "8000"]) `shouldBe` Just (Just 8000)
       parse ["--context-budget", "0"] `shouldBe` Nothing
     it "parses --max-cost and rejects zero" $ do
       fmap optCostLimit (parse []) `shouldBe` Just Nothing
@@ -70,16 +70,32 @@ spec = do
     it "keeps reasoning only when asked" $ do
       fmap optKeepReasoning (parse []) `shouldBe` Just False
       fmap optKeepReasoning (parse ["--keep-reasoning"]) `shouldBe` Just True
+    it "accepts a known --reasoning effort, in any case" $ do
+      fmap optEffort (parse ["--reasoning", "High"]) `shouldBe` Just (Just "high")
+      fmap optEffort (parse []) `shouldBe` Just Nothing
+      parse ["--reasoning", "extreme"] `shouldBe` Nothing
+    it "parses --continue and -c" $ do
+      fmap optContinue (parse []) `shouldBe` Just False
+      fmap optContinue (parse ["--continue"]) `shouldBe` Just True
+      fmap optContinue (parse ["-c"]) `shouldBe` Just True
     it "rejects a --max-turns of zero" $
       parse ["--max-turns", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
 
+  describe "contextBudget" $
+    it "takes half the context window, at most 100000" $
+      map contextBudget [Nothing, Just 1048576, Just 200000, Just 128000, Just 8192, Just 1]
+        `shouldBe` [100000, 100000, 100000, 64000, 4096, 1]
+
   describe "resolveProvider" $ do
+    it "passes --reasoning to the provider" $
+      fmap (providerEffort . fst) (resolve [("OPENROUTER_API_KEY", "k")] [] ["-m", "a/b", "--reasoning", "low"])
+        `shouldBe` Right (Just "low")
     let orKey = [("OPENROUTER_API_KEY", "k")]
     it "uses OpenRouter when its key is set" $
       resolve orKey [] ["-m", "a/b"]
-        `shouldBe` Right (Provider OpenRouter "https://openrouter.ai/api/v1" (Just "k"), "a/b")
+        `shouldBe` Right (Provider OpenRouter "https://openrouter.ai/api/v1" (Just "k") Nothing, "a/b")
     it "reuses the last model for the provider" $
       fmap snd (resolve orKey [(OpenRouter, "a/b"), (OpenAICompatible, "local")] []) `shouldBe` Right "a/b"
     it "prefers -m over the remembered model" $
@@ -88,7 +104,7 @@ spec = do
       resolve orKey [] [] `shouldSatisfy` isLeft
     it "lets -P override the OpenRouter default" $
       resolve orKey [(OpenAICompatible, "local")] ["-P", "openai"]
-        `shouldBe` Right (Provider OpenAICompatible "https://api.openai.com/v1" Nothing, "local")
+        `shouldBe` Right (Provider OpenAICompatible "https://api.openai.com/v1" Nothing Nothing, "local")
     it "defaults to openai without an OpenRouter key" $
       fmap (providerKind . fst) (resolve [] [] ["-m", "x"]) `shouldBe` Right OpenAICompatible
     it "requires a key for OpenRouter" $

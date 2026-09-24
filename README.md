@@ -12,13 +12,13 @@ An agent loop is mostly plumbing: JSON arrives from an untrusted model and drive
 
 - **Effects are visible in signatures.** Edits (`applyEdit`), rendering (`renderEvent`), option resolution (`resolveProvider`) and prompt assembly (`assemble`) have no `IO` in their types. Their tests call them directly, with no temp files or servers.
 
-- **One loop, two monads.** `runTurn` runs in any `MonadIO`. Headless mode uses `IO`. The REPL uses haskeline's `InputT`, so `ask`-mode prompts share the line editor.
+- **One loop, two front ends.** Headless mode and the REPL run the same `runTurn`. They differ only in their `Hooks`: how events print and how `ask`-mode calls are confirmed.
 
 - **Model output cannot crash the loop.** Malformed tool arguments, unknown tools and IO errors become `Either` values. The model receives them as tool results.
 
 - **The runtime handles cancellation.** Green threads, `timeout` and asynchronous exceptions implement the bash timeout (it kills the process group) and Ctrl-C cancellation of a REPL turn. The shell runner is about 40 lines.
 
-- **One native executable.** No interpreter or package tree at run time. The binary links only system libraries: libc, libm, libz, libtinfo and libgmp.
+- **One native executable.** No interpreter or package tree at run time. The binary links only system libraries: libc, libm, libz and libgmp.
 
 Costs:
 
@@ -39,6 +39,8 @@ make build     # cabal build all
 make test      # cabal test
 make install   # copies a stripped hilda to ~/.local/bin (override: BINDIR=...)
 ```
+
+`vendor/isocline` is the isocline 1.1.0 line editor with a fix that lets it read Shift+Enter; `vendor/isocline.patch` lists the changes.
 
 ## Providers and models
 
@@ -81,9 +83,11 @@ Usage lines show cached tokens, e.g. `12000 in (9000 cached) / 300 out`. `--json
 
 ## Reasoning
 
+`--reasoning EFFORT` asks the model to reason: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. hilda sends it as `reasoning.effort` to OpenRouter and as `reasoning_effort` to the `openai` provider. Each model supports a subset; others fail at the provider. Without the flag, the model's default applies, and Anthropic models do not reason.
+
 `--keep-reasoning` sends each reply's `reasoning_details` back with later requests. OpenRouter advises this for tool calls with reasoning models ([OpenRouter docs](https://openrouter.ai/docs/use-cases/reasoning-tokens)); without it, the model restarts its reasoning after each tool call. The blocks count toward `--context-budget`. Elision drops them from replies to earlier prompts, never from the current tool loop.
 
-It is off by default. In one test run (2026-09-24), omitting the blocks did not fail on either model tried, and `openai/gpt-6-luna-pro` returned none. Gemini's blocks are thought signatures bound to the upstream that issued them. OpenRouter can route one conversation to Google Vertex and then to Google AI Studio, which rejects Vertex signatures ("Corrupted thought signature"). hilda then drops all kept reasoning from the history, prints `[the provider rejected the kept reasoning; resending without it]` (`reasoning_dropped` in `--stream-json`), and resends once.
+It is off by default. In a test on Gemini 3.8 Flash, GPT-6 Luna Pro and Claude Haiku 4.5 with `--reasoning medium`, omitting the blocks never failed and answers were equally correct, while keeping them raised Gemini's cost by about 60%. Gemini's blocks are thought signatures bound to the upstream that issued them. OpenRouter can route one conversation to Google Vertex and then to Google AI Studio, which rejects Vertex signatures ("Corrupted thought signature"). hilda then drops all kept reasoning from the history, prints `[the provider rejected the kept reasoning; resending without it]` (`reasoning_dropped` in `--stream-json`), and resends once.
 
 Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
 
@@ -93,11 +97,13 @@ Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting N
 
 ## Context budget
 
-hilda keeps the history under `--context-budget` tokens (default 100,000, estimated at four characters per token). Before each model call, if the history is over budget, the oldest tool results and long tool-call arguments (such as file contents sent to `write`) are elided until it fits three quarters of the budget. Each elision changes an early message and invalidates the prompt cache from there on, so trimming in larger steps keeps it rare. Elided results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. Elided arguments become `[elided to fit the context budget: N characters]` inside otherwise valid JSON. hilda prints `[context: elided N old tool messages]` when this happens.
+hilda keeps the history under `--context-budget` tokens, estimated at four characters per token. Before each model call, if the history is over budget, the oldest tool results and long tool-call arguments (such as file contents sent to `write`) are elided until it fits three quarters of the budget. Each elision changes an early message and invalidates the prompt cache from there on, so trimming in larger steps keeps it rare. Elided results are replaced with a stub such as `[elided to fit the context budget: 20692 characters; run the tool again if needed]`. Elided arguments become `[elided to fit the context budget: N characters]` inside otherwise valid JSON. hilda prints `[context: elided N old tool messages]` when this happens.
 
 - The last assistant message and the results after it are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
 - Elision is written into the history, so the start of the conversation stays the same between calls and provider prompt caching keeps working.
-- Set the budget below your model's context window. Local models often have 8,000 to 32,000 tokens.
+- Default on OpenRouter: half the model's context window, at most 100,000. The window is the smallest among the model's endpoints, looked up once and cached in `$XDG_STATE_HOME/hilda/contexts.json`. Elsewhere, or if the lookup fails, the default is 100,000. `/model` in the REPL looks up the new model's budget; an explicit `--context-budget` stays.
+- With a local server, set the budget below the model's context window. Local models often have 8,000 to 32,000 tokens.
+- Each tool result is limited to a quarter of the budget: 30,000 characters at the default, 8,000 at a budget of 8,000 tokens. Several recent results then fit even in a small budget.
 
 The REPL footer and `/usage` show the context size: the prompt tokens of the last model call. `--json` output includes it as `context_tokens`.
 
@@ -109,12 +115,12 @@ Exit codes: 0 finished, 1 error, 2 stopped by `--max-turns` (default 50), 3 stop
 
 Tools:
 
-- `read`: streams the file. Output stops at the line limit or about 30,000 characters and names the `offset` to continue from.
+- `read`: streams the file. Output stops at the line limit or the result limit and names the `offset` to continue from.
 - `write`: writes through an exclusively created temporary file, then renames it into place.
 - `edit`: exact, unique string replacement. Files over 10 MiB are refused.
 - `bash`: `bash -c`, default timeout 120 s. The whole process group is killed on timeout.
 
-Other tool output over 30,000 characters keeps its head and tail.
+Other tool output over the result limit (a quarter of `--context-budget`, at most 30,000 characters) keeps its head and tail.
 
 **Warning:** `yolo`, the default, runs every command the model asks for with your user's permissions. A model can delete files, rewrite your dotfiles or send data over the network. Use `-M ask` or `-M read-only` with untrusted prompts or models, or run hilda as an unprivileged user or in a container.
 
@@ -144,4 +150,8 @@ Options:
 
 ## REPL commands
 
-`/mode`, `/model`, `/tools`, `/system`, `/usage` (tokens and cost), `/clear`, `/quit`. Start a line with `//` to send a prompt that begins with `/`. Ctrl-C cancels the current turn. Ctrl-D exits.
+`/mode`, `/model`, `/tools`, `/system`, `/usage` (tokens and cost), `/clear`, `/quit`. Start a line with `//` to send a prompt that begins with `/`. Shift+Enter or Ctrl+J starts a new line in the prompt, and pasted text keeps its lines. Ctrl-C clears the entry at the prompt, cancels a running turn, and declines an `ask` confirmation. Ctrl-D exits.
+
+## Sessions
+
+The REPL saves its history after each turn and after `/clear`, one file per working directory, in `$XDG_STATE_HOME/hilda/sessions/` (mode 0700). `hilda -c` (`--continue`) resumes it. The system prompt is rebuilt from the current options and AGENTS.md files. Session cost starts at zero, so `--max-cost` counts from the resume. Saved transcripts contain file contents and command output. `--continue` works only in the REPL, not with `-p`.

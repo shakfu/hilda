@@ -94,6 +94,6 @@ spec = do
 
     it "appends OpenRouter's raw upstream error" $
       fold ["{\"error\":{\"message\":\"Provider returned error\",\"metadata\":{\"raw\":\"Corrupted thought signature.\\n\"}}}"]
-        `shouldBe` Left "Error in $: provider error: Provider returned error: Corrupted thought signature."
+        `shouldBe` Left "provider error: Provider returned error: Corrupted thought signature."
     it "fails on an error chunk" $
-      fold ["{\"error\":{\"message\":\"overloaded\"}}"] `shouldBe` Left "Error in $: provider error: overloaded"
+      fold ["{\"error\":{\"message\":\"overloaded\"}}"] `shouldBe` Left "provider error: overloaded"

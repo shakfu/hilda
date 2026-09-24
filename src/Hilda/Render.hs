@@ -36,8 +36,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import Data.Text.Encoding (encodeUtf8)
-import Hilda.Agent (Event (..), resultLimit)
-import Hilda.Tools (truncateMiddle)
+import Hilda.Agent (Event (..))
 import Hilda.Types
 import System.Environment (lookupEnv)
 import System.IO (Handle, hFlush, hIsTerminalDevice)
@@ -137,7 +136,7 @@ callSummary c = elide 80 . visible $ (fromMaybe (callArgs c) (primary =<< decode
 -- | Rough token count of a tool result as the model receives it, at four
 -- characters per token. No tokenizer is available for arbitrary models.
 estimateTokens :: Text -> Int
-estimateTokens r = (T.length (truncateMiddle resultLimit r) + 3) `div` 4
+estimateTokens r = (T.length r + 3) `div` 4
 
 -- | Token counts and cost, e.g. @12000 in (9000 cached) / 300 out, $0.0120@.
 renderUsage :: Usage -> Text

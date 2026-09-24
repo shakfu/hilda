@@ -13,6 +13,7 @@ module Hilda.Tools
   , bashTool
   , atomicWrite
   , resultLimit
+  , resultLimitFor
   , editLimit
     -- * Pure helpers
   , numberLines
@@ -65,8 +66,8 @@ toolSpec t =
     ]
 
 -- | @read@, @write@, @edit@ and @bash@, in the order offered to the model.
-builtinTools :: [Tool]
-builtinTools = [readTool, writeTool, editTool, bashTool]
+builtinTools :: Int -> [Tool]
+builtinTools limit = [readTool limit, writeTool, editTool, bashTool]
 
 -- | Object schema from (name, JSON type, description) triples.
 schema :: [(Key, Text, Text)] -> [Key] -> Value
@@ -81,9 +82,10 @@ schema props required =
 withArgs :: (Object -> Parser a) -> (a -> IO (Either Text Text)) -> Value -> IO (Either Text Text)
 withArgs p k v = either (pure . Left . T.pack) k (parseEither (withObject "arguments" p) v)
 
--- | Read a text file with line numbers, paged below 'resultLimit'. Refuses binary files.
-readTool :: Tool
-readTool =
+-- | Read a text file with line numbers, paged below @limit@ characters, the
+-- result limit. Refuses binary files.
+readTool :: Int -> Tool
+readTool resLimit =
   Tool
     { toolName = "read"
     , toolDescription =
@@ -106,7 +108,7 @@ readTool =
             if BL.elem 0 (BL.take 8192 bytes)
               then pure (Left (T.pack path <> " looks binary (NUL byte in the first 8 KiB)"))
               else do
-                let out = numberLines readBudget offset limit (map (decodeUtf8Lenient . BL.toStrict) (BL8.lines bytes))
+                let out = numberLines (readBudget resLimit) offset limit (map (decodeUtf8Lenient . BL.toStrict) (BL8.lines bytes))
                 Right out <$ evaluate (T.length out)
     }
 
@@ -246,17 +248,26 @@ atomicWrite path bytes = do
     hClose h
     renameFile tmp target
 
--- | Characters of tool output sent back to the model per call.
+-- | Most characters of tool output sent back to the model per call.
 resultLimit :: Int
 resultLimit = 30000
+
+-- | Characters per tool result for a context budget in tokens: a quarter
+-- of the budget, at most 'resultLimit'. Elision trims to three quarters
+-- and never touches the newest results, so three parallel results still
+-- fit; with a fixed limit, one read could exceed a small budget and elision
+-- would thrash.
+resultLimitFor :: Int -> Int
+resultLimitFor budget = min resultLimit budget
 
 -- | Largest file @edit@ loads, in bytes.
 editLimit :: Int
 editLimit = 10 * 1024 * 1024
 
--- | Room for @read@ output, below 'resultLimit' so the agent never cuts it.
-readBudget :: Int
-readBudget = resultLimit - 200
+-- | Room for @read@ output below a result limit, leaving space for the
+-- continuation line so the agent never cuts it.
+readBudget :: Int -> Int
+readBudget limit = limit - min 200 (limit `div` 10)
 
 -- | Number lines from @offset@ (1-based). Stops after @limit@ lines or
 -- @budget@ characters and names the offset to continue from.

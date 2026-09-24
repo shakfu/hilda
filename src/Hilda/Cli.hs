@@ -5,6 +5,7 @@ module Hilda.Cli
   , AgentsSource (..)
   , optionsInfo
   , resolveProvider
+  , contextBudget
   , main
   ) where
 
@@ -53,9 +54,11 @@ data Options = Options
   , optAppend   :: Maybe SystemSource
   , optAgents   :: AgentsSource
   , optMaxTurns :: Int
-  , optBudget   :: Int
+  , optBudget   :: Maybe Int -- ^ Absent: see 'contextBudget'.
   , optCostLimit :: Maybe Double
   , optKeepReasoning :: Bool
+  , optEffort   :: Maybe Text
+  , optContinue :: Bool
   }
   deriving stock (Eq, Show)
 
@@ -109,10 +112,12 @@ options =
             <|> pure Discover
         )
     <*> option positive (long "max-turns" <> metavar "N" <> value 50 <> showDefault <> help "Model calls allowed per prompt")
-    <*> option
-      positive
-      ( long "context-budget" <> metavar "TOKENS" <> value 100000 <> showDefault
-          <> help "Elide the oldest tool results when the history exceeds this many tokens (estimated at 4 characters each)"
+    <*> optional
+      ( option
+          positive
+          ( long "context-budget" <> metavar "TOKENS"
+              <> help "Elide the oldest tool results when the history exceeds this many tokens (estimated at 4 characters each). Default: half the model's context window on OpenRouter, at most 100000; else 100000"
+          )
       )
     <*> optional
       ( option
@@ -123,6 +128,14 @@ options =
       ( long "keep-reasoning"
           <> help "Send reasoning_details back with later requests, as OpenRouter advises for tool calls with reasoning models"
       )
+    <*> optional
+      ( option
+          (maybeReader (\s -> let e = T.toLower (T.pack s) in if e `elem` efforts then Just e else Nothing))
+          ( long "reasoning" <> metavar "EFFORT"
+              <> help ("Ask the model to reason: " <> T.unpack (T.intercalate "|" efforts) <> ". Models support different subsets")
+          )
+      )
+    <*> switch (short 'c' <> long "continue" <> help "Resume the last REPL session in this directory")
   where
     positive :: (Read a, Num a, Ord a) => ReadM a
     positive = auto >>= \n -> if n > 0 then pure n else readerError "must be positive"
@@ -152,7 +165,7 @@ resolveProvider env remembered o = do
   -- Local OpenAI-compatible servers often need no key; OpenRouter always does.
   when (isNothing key && (kind == OpenRouter || isJust (optKeyEnv o))) $
     Left ("no API key in $" <> T.pack keyVar)
-  pure (Provider kind base key, model)
+  pure (Provider kind base key (optEffort o), model)
   where
     nonEmpty = mfilter (not . null) . env
 
@@ -176,18 +189,42 @@ systemPrompt o = do
 readUtf8 :: FilePath -> IO Text
 readUtf8 f = decodeUtf8Lenient <$> BS.readFile f
 
+-- | Budget in tokens for a context window: half of it, leaving room for the
+-- reply and for undercounting at 4 characters per token, at most 100000,
+-- which also limits the cost per call. 100000 when the window is unknown.
+contextBudget :: Maybe Int -> Int
+contextBudget = maybe cap (\n -> max 1 (min cap (n `div` 2)))
+  where
+    cap = 100000
+
+-- | The model's context window on OpenRouter, cached in 'contextsFile'.
+-- Other providers have no common way to report it.
+knownContext :: Provider -> Text -> IO (Maybe Int)
+knownContext p model
+  | providerKind p /= OpenRouter = pure Nothing
+  | otherwise = do
+      path <- contextsFile
+      Map.lookup model <$> loadMap path >>= \case
+        Just n -> pure (Just n)
+        Nothing -> do
+          found <- lookupContext p model
+          mapM_ (remember path model) found
+          pure found
+
 -- | Resolve options and environment, then run headless or start the REPL.
 main :: IO ()
 main = do
   o <- execParser optionsInfo
   env <- getEnvironment
   statePath <- stateFile
-  models <- loadModels statePath
+  models <- loadMap statePath
   (provider, model) <-
     either die' pure (resolveProvider (`lookup` env) (\k -> Map.lookup (kindName k) models) o)
-  let remember = rememberModel statePath (providerKind provider)
+  let saveModel = rememberModel statePath (providerKind provider)
   complete <- (if optKeepReasoning o then id else withoutReasoning) <$> (newComplete provider >>= either die' pure)
+  let budgetFor = maybe (fmap contextBudget . knownContext provider) (const . pure) (optBudget o)
   system <- systemPrompt o
+  sessionPath <- sessionFile =<< getCurrentDirectory
   let cfg =
         Config
           { cfgComplete = complete
@@ -196,15 +233,21 @@ main = do
           , cfgMode = optMode o
           , cfgSystem = system
           , cfgMaxTurns = optMaxTurns o
-          , cfgBudget = optBudget o
+          , cfgBudget = budgetFor
           , cfgCostLimit = optCostLimit o
-          , cfgRemember = remember
+          , cfgRemember = saveModel
           }
   case optPrompt o of
+    Just _ | optContinue o -> die' "--continue resumes the REPL; it cannot be used with -p"
     Just "-" -> decodeUtf8Lenient <$> BS.getContents >>= runHeadless cfg (optOutput o) >>= exitWith
     Just p -> runHeadless cfg (optOutput o) p >>= exitWith
     Nothing
       | optOutput o /= Text -> die' "--json and --stream-json need a prompt (-p)"
-      | otherwise -> runRepl cfg
+      | otherwise -> do
+          restored <-
+            if optContinue o
+              then loadSession sessionPath >>= either (\why -> [] <$ TIO.hPutStrLn stderr ("hilda: " <> why <> "; starting fresh")) pure
+              else pure []
+          runRepl cfg restored (saveSession sessionPath)
   where
     die' msg = TIO.hPutStrLn stderr ("hilda: " <> msg) >> exitFailure
