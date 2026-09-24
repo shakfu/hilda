@@ -12,6 +12,7 @@ module Hilda.Provider
   , encodeRequest
   , decodeReply
   , newComplete
+  , newCompleteWith
   , retryableStatus
   , retryableError
   ) where
@@ -106,7 +107,11 @@ headers p =
 -- | Build a 'Complete' that shares one connection manager across calls.
 -- Fails when the base URL does not parse.
 newComplete :: Provider -> IO (Either Text Complete)
-newComplete p =
+newComplete = newCompleteWith idleLimit
+
+-- | 'newComplete' with the given idle limit in seconds.
+newCompleteWith :: Int -> Provider -> IO (Either Text Complete)
+newCompleteWith idle p =
   case H.parseRequest (dropWhileEnd (== '/') (providerBaseUrl p) <> "/chat/completions") of
     Nothing -> pure (Left ("invalid base URL: " <> T.pack (providerBaseUrl p)))
     Just base -> do
@@ -117,7 +122,7 @@ newComplete p =
               , H.requestHeaders = headers p
               , H.requestBody = H.RequestBodyLBS (encode (encodeRequest (providerKind p) r))
               }
-      pure (Right (\sink r -> send mgr (prepare r) sink))
+      pure (Right (\sink r -> send idle mgr (prepare r) sink))
 
 data Attempt = Retry Text | Done (Either Text Reply)
 
@@ -126,13 +131,13 @@ data Attempt = Retry Text | Done (Either Text Reply)
 -- response timeout may follow a billed completion, so those fail at once.
 -- A socket error mid-body reaches us as a raw 'IOException', not an
 -- 'H.HttpException'; it fails at once for the same reason.
-send :: H.Manager -> H.Request -> (Delta -> IO ()) -> IO (Either Text Reply)
-send mgr req sink = go (0 :: Int)
+send :: Int -> H.Manager -> H.Request -> (Delta -> IO ()) -> IO (Either Text Reply)
+send idle mgr req sink = go (0 :: Int)
   where
     retries = 3
     backoff n = threadDelay (1000000 * 2 ^ n)
     go n =
-      try (handle @IOException lost (H.withResponse req mgr (receive sink))) >>= \case
+      try (handle @IOException lost (H.withResponse req mgr (receive idle sink))) >>= \case
         Left e
           | n < retries, retryableError e -> backoff n >> go (n + 1)
           | otherwise -> pure (Left (describe e))
@@ -148,32 +153,51 @@ send mgr req sink = go (0 :: Int)
 
 -- | Read one response. A server that ignores @stream@ answers with plain
 -- JSON; its text reaches the sink in one piece.
-receive :: (Delta -> IO ()) -> H.Response H.BodyReader -> IO Attempt
-receive sink resp
-  | retryableStatus code = Retry . httpError <$> consume
-  | code < 200 || code >= 300 = Done . Left . httpError <$> consume
-  | streaming = Done <$> readStream (H.responseBody resp) sink
+receive :: Int -> (Delta -> IO ()) -> H.Response H.BodyReader -> IO Attempt
+receive idle sink resp
+  | retryableStatus code = Retry . either id httpError <$> consume
+  | code < 200 || code >= 300 = Done . Left . either id httpError <$> consume
+  | streaming = Done <$> readStream idle (H.responseBody resp) sink
   | otherwise = do
-      r <- (\b -> first T.pack (eitherDecodeStrict b) >>= decodeReply) <$> consume
+      r <- (>>= \b -> first T.pack (eitherDecodeStrict b) >>= decodeReply) <$> consume
       either (const (pure ())) (mapM_ (sink . TextDelta) . replyText) r
       pure (Done r)
   where
     code = statusCode (H.responseStatus resp)
-    consume = BS.concat <$> H.brConsume (H.responseBody resp)
+    consume = readBody idle (H.responseBody resp)
     httpError body = "HTTP " <> T.pack (show code) <> ": " <> decodeUtf8Lenient body
     streaming = maybe False ("text/event-stream" `BS.isPrefixOf`) (lookup hContentType (H.responseHeaders resp))
 
--- | Seconds without any bytes before a stream counts as stalled.
-streamIdleLimit :: Int
-streamIdleLimit = 300
+-- | Seconds without any bytes before a response body counts as stalled.
+-- The manager's response timeout covers only the status and headers.
+idleLimit :: Int
+idleLimit = 300
+
+-- | One chunk, or Nothing after @idle@ seconds without data.
+readIdle :: Int -> H.BodyReader -> IO (Maybe BS.ByteString)
+readIdle idle body = timeout (idle * 1000000) (H.brRead body)
+
+stalled :: Int -> Text
+stalled idle = "response stalled: no data for " <> T.pack (show idle) <> "s"
+
+-- | The whole body, failing if it stalls.
+readBody :: Int -> H.BodyReader -> IO (Either Text BS.ByteString)
+readBody idle body = go []
+  where
+    go acc =
+      readIdle idle body >>= \case
+        Nothing -> pure (Left (stalled idle))
+        Just chunk
+          | BS.null chunk -> pure (Right (BS.concat (reverse acc)))
+          | otherwise -> go (chunk : acc)
 
 -- | Fold server-sent events into a reply, passing text deltas to the sink.
-readStream :: H.BodyReader -> (Delta -> IO ()) -> IO (Either Text Reply)
-readStream body sink = loop BS.empty emptyPartial
+readStream :: Int -> H.BodyReader -> (Delta -> IO ()) -> IO (Either Text Reply)
+readStream idle body sink = loop BS.empty emptyPartial
   where
     loop buf p =
-      timeout (streamIdleLimit * 1000000) (H.brRead body) >>= \case
-        Nothing -> pure (Left ("stream stalled: no data for " <> T.pack (show streamIdleLimit) <> "s"))
+      readIdle idle body >>= \case
+        Nothing -> pure (Left (stalled idle))
         Just chunk
           -- End of body without [DONE]: flush the last line and finish.
           | BS.null chunk -> feed (fst (sseData (buf <> "\n"))) Nothing p

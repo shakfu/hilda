@@ -72,9 +72,10 @@ fitContext budget hist
 elidedPrefix :: Text
 elidedPrefix = "[elided to fit the context budget"
 
--- | Tool-call arguments with every string over 300 characters replaced by
--- a stub, re-encoded as JSON; and the characters saved. Arguments that
--- are not a JSON object, or have nothing to shrink, are unchanged.
+-- | Tool-call arguments with every top-level string over 300 characters
+-- replaced by a stub, re-encoded as JSON; and the characters saved.
+-- Arguments that are not a JSON object, or have nothing to shrink, are
+-- unchanged.
 shrinkArgs :: Text -> (Text, Int)
 shrinkArgs raw = case decodeStrict (encodeUtf8 raw) of
   Just (Object o) | any long (KM.elems o) ->

@@ -92,7 +92,7 @@ spec = do
   describe "send" $ do
     let ok = json 200 "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"
         call port = do
-          Right complete <- newComplete (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing)
+          Right complete <- newCompleteWith 1 (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing)
           seen <- newIORef []
           r <- complete (\d -> modifyIORef seen (d :)) (Request "m" [User "hi"] [])
           (,) r . reverse <$> readIORef seen
@@ -131,9 +131,27 @@ spec = do
       r `shouldSatisfy` either (T.isPrefixOf "connection lost: ") (const False)
       deltas `shouldBe` [TextDelta "Hel"]
       n `shouldBe` 1
+    it "fails a stream that stalls mid-body" $ do
+      ((r, deltas), n) <- serve [Stall "text/event-stream" "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n", ok]
+      r `shouldBe` Left "response stalled: no data for 1s"
+      deltas `shouldBe` [TextDelta "Hel"]
+      n `shouldBe` 1
+    it "fails a plain JSON body that stalls" $ do
+      ((r, _), n) <- serve [Stall "application/json" "{\"choi", ok]
+      r `shouldBe` Left "response stalled: no data for 1s"
+      n `shouldBe` 1
+    it "fails a 200 body that is not JSON, without retrying" $ do
+      ((r, _), n) <- serve [json 200 "not json", ok]
+      r `shouldSatisfy` isLeft
+      n `shouldBe` 1
     it "passes a plain JSON reply to the sink in one piece" $ do
       ((_, deltas), _) <- serve [ok]
       deltas `shouldBe` [TextDelta "ok"]
+
+  describe "newComplete" $
+    it "rejects a base URL that does not parse" $ do
+      r <- newComplete (Provider OpenAICompatible "not a url" Nothing)
+      either Just (const Nothing) r `shouldBe` Just "invalid base URL: not a url"
 
   describe "parseKind" $
     it "round-trips every kind" $

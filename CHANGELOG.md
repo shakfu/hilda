@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 - A connection reset while a response streams now fails the turn, and the REPL keeps its history. Before, the reset reached `send` as a raw `IOException`. `send` caught only `HttpException`, so the reset killed the process and lost the session. The request is not retried, since the completion may already be billed.
 
+- A non-streaming or error response body that stops sending data now fails after 300 s, like a stream does. Before, it could hang the turn forever. The manager's 600 s response timeout covers only the status and headers.
+
 ## [0.1.0] - 2026-09-24
 
 First release.

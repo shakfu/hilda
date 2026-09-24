@@ -17,11 +17,12 @@ import Data.IORef
 import Network.Socket
 import qualified Network.Socket.ByteString as NSB
 
--- | A full response, or a 200 stream cut by a TCP reset after the given
--- body bytes.
+-- | A full response; a 200 stream cut by a TCP reset after the given body
+-- bytes; or a 200 response of the given type that stalls after them.
 data Canned
   = Canned Int BS.ByteString BS.ByteString
   | Reset BS.ByteString
+  | Stall BS.ByteString BS.ByteString
 
 json :: Int -> BS.ByteString -> Canned
 json code = Canned code "application/json"
@@ -62,6 +63,7 @@ withServer port delay responses act = do
         [] -> ([], json 500 "{}")
       case canned of
         Reset _ -> NSB.sendAll c (render canned) >> setSockOpt c Linger (StructLinger 1 0) >> close c
+        Stall _ _ -> (NSB.sendAll c (render canned) >> forever (threadDelay 1000000)) `finally` close c
         _ -> NSB.sendAll c (render canned) `finally` close c
 
 localhost :: HostAddress
@@ -84,18 +86,23 @@ readRequest c = go BS.empty
         [] -> 0
 
 render :: Canned -> BS.ByteString
-render (Reset body) =
-  BS.concat
-    [ "HTTP/1.1 200 X\r\n"
-    , "Content-Type: text/event-stream\r\n"
-    , "Content-Length: ", BS8.pack (show (BS.length body + 1000)), "\r\n\r\n"
-    , body
-    ]
+render (Reset body) = partial "text/event-stream" body
+render (Stall ctype body) = partial ctype body
 render (Canned code ctype body) =
   BS.concat
     [ "HTTP/1.1 ", BS8.pack (show code), " X\r\n"
     , "Content-Type: ", ctype, "\r\n"
     , "Content-Length: ", BS8.pack (show (BS.length body)), "\r\n"
     , "Connection: close\r\n\r\n"
+    , body
+    ]
+
+-- | A 200 response that promises more body than it sends.
+partial :: BS.ByteString -> BS.ByteString -> BS.ByteString
+partial ctype body =
+  BS.concat
+    [ "HTTP/1.1 200 X\r\n"
+    , "Content-Type: ", ctype, "\r\n"
+    , "Content-Length: ", BS8.pack (show (BS.length body + 1000)), "\r\n\r\n"
     , body
     ]
