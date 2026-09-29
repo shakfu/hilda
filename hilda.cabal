@@ -47,6 +47,7 @@ library
     Hilda.App
     Hilda.Cli
     Hilda.Context
+    Hilda.Markdown
     Hilda.Policy
     Hilda.Prompt
     Hilda.Provider
@@ -89,6 +90,7 @@ test-suite spec
     AppSpec
     CliSpec
     ContextSpec
+    MarkdownSpec
     PolicySpec
     PromptSpec
     ProviderSpec

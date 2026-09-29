@@ -21,6 +21,7 @@ import Hilda.App
 import Hilda.Policy
 import Hilda.Prompt
 import Hilda.Provider
+import Hilda.Render (When (..), parseWhen)
 import Hilda.Repl (runRepl)
 import Hilda.State
 import Options.Applicative
@@ -59,6 +60,8 @@ data Options = Options
   , optKeepReasoning :: Bool
   , optEffort   :: Maybe Text
   , optContinue :: Bool
+  , optNoColor  :: Bool
+  , optMarkdown :: When
   }
   deriving stock (Eq, Show)
 
@@ -74,7 +77,7 @@ optionsInfo =
             , "Models: the last model per provider is saved in"
             , "  $XDG_STATE_HOME/hilda/models.json (default ~/.local/state/hilda/)."
             , "Environment: OPENROUTER_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL,"
-            , "  NO_COLOR (disables color)."
+            , "  NO_COLOR (disables color and markdown styling)."
             , "Exit codes: 0 finished, 1 error, 2 stopped by --max-turns, 3 stopped by --max-cost." :: String
             ]
         )
@@ -136,6 +139,12 @@ options =
           )
       )
     <*> switch (short 'c' <> long "continue" <> help "Resume the last REPL session in this directory")
+    <*> switch (long "no-color" <> help "Do not color status and tool lines. NO_COLOR also turns off markdown styling")
+    <*> option
+      (maybeReader (parseWhen . T.pack))
+      ( long "markdown" <> metavar "always|auto|never" <> value Auto
+          <> help "Style reply text as markdown. auto: on a terminal without NO_COLOR (default)"
+      )
   where
     positive :: (Read a, Num a, Ord a) => ReadM a
     positive = auto >>= \n -> if n > 0 then pure n else readerError "must be positive"
@@ -236,6 +245,8 @@ main = do
           , cfgBudget = budgetFor
           , cfgCostLimit = optCostLimit o
           , cfgRemember = saveModel
+          , cfgColor = not (optNoColor o)
+          , cfgMarkdown = optMarkdown o
           }
   case optPrompt o of
     Just _ | optContinue o -> die' "--continue resumes the REPL; it cannot be used with -p"

@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Hilda.Agent
 import Hilda.App
 import Hilda.Policy (Mode (..))
+import Hilda.Render (When (..))
 import Hilda.Provider (ProviderKind (..))
 import Hilda.Types
 import System.Exit (ExitCode (..))
@@ -16,7 +17,7 @@ field :: Text -> Value -> Maybe Value
 field k = parseMaybe (withObject "event" (.: Key.fromText k))
 
 cfg :: Config
-cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) Nothing (const (pure ()))
+cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) Nothing (const (pure ())) True Auto
 
 spec :: Spec
 spec = do

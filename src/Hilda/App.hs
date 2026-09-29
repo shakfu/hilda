@@ -20,6 +20,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Hilda.Agent
 import Hilda.Policy
+import Hilda.Markdown (renderMarkdown)
 import Hilda.Render
 import Hilda.Provider (ProviderKind, kindName)
 import Hilda.Tools (builtinTools, resultLimitFor)
@@ -39,6 +40,8 @@ data Config = Config
   , cfgBudget   :: Text -> IO Int -- ^ Context budget for a model, in estimated tokens.
   , cfgCostLimit :: Maybe Double -- ^ Spending limit in credits (USD on OpenRouter).
   , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
+  , cfgColor    :: Bool -- ^ Color status and tool lines on a terminal (off: @--no-color@).
+  , cfgMarkdown :: When -- ^ When to style reply text as markdown (@--markdown@).
   }
 
 -- | Shown by @--version@ and at REPL start.
@@ -56,11 +59,15 @@ data Output
 runHeadless :: Config -> Output -> Text -> IO ExitCode
 runHeadless cfg output prompt = do
   budget <- cfgBudget cfg (cfgModel cfg)
-  paint <- (\on -> if on then ansi else plain) <$> colorEnabled stderr
+  paint <- (\on -> if on && cfgColor cfg then ansi else plain) <$> colorEnabled stderr
+  styled <- markdownEnabled (cfgMarkdown cfg) stdout
+  tty <- hIsTerminalDevice stdout
+  -- Escape model text bound for a terminal or a pager; piped plain text is data.
+  let answer = (if styled then renderMarkdown else id) . (if styled || tty then printable else id)
   terminal <- ansiTerminal stderr
   let complete = case output of
         -- Text mode keeps stdout for the final answer, so it does not echo.
-        Text | terminal -> liveOutput stderr paint (Live True False) (cfgComplete cfg)
+        Text | terminal -> liveOutput stderr paint (Live True False False) (cfgComplete cfg)
         StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
         _ -> cfgComplete cfg
   out <- runTurn (env budget complete (emit paint)) [System (cfgSystem cfg)] prompt
@@ -68,10 +75,10 @@ runHeadless cfg output prompt = do
   case output of
     Text -> do
       case outStop out of
-        Finished  -> TIO.putStrLn (outText out)
+        Finished  -> TIO.putStrLn (answer (outText out))
         TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
         CostLimit -> TIO.hPutStrLn stderr ("hilda: stopped at the cost limit, " <> maybe "" formatCost (usageCost (outUsage out)) <> " spent (--max-cost)")
-        Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> e)
+        Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> printable e)
       TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> "]"))
     _ -> jsonLine (outcomeJson cfg out)
   pure (exitCodeFor (outStop out))

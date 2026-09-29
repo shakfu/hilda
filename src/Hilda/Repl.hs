@@ -89,13 +89,14 @@ tally ref complete sink req = do
 runRepl :: Config -> [Message] -> ([Message] -> IO ()) -> IO ()
 runRepl cfg0 restored save = do
   terminal <- ansiTerminal stdout
-  color <- colorEnabled stdout
+  color <- (cfgColor cfg0 &&) <$> colorEnabled stdout
+  styled <- markdownEnabled (cfgMarkdown cfg0) stdout
   let paint = if color then ansi else plain
   spent <- newIORef mempty
   dir <- getXdgDirectory XdgState "hilda"
   createDirectoryIfMissing True dir
   setupEditor color (dir </> "history")
-  interactive paint spent restored save cfg0 {cfgComplete = tally spent (liveOutput stdout paint (Live terminal True) (cfgComplete cfg0))}
+  interactive paint spent restored save cfg0 {cfgComplete = tally spent (liveOutput stdout paint (Live terminal True styled) (cfgComplete cfg0))}
 
 -- | Line editing with history in @path@ and multi-line entries. Brace
 -- insertion, hints and highlighting are off: prompts are prose, not code.
@@ -142,7 +143,7 @@ interactive paint spent restored save cfg = do
         Finished  -> pure ()
         TurnLimit -> say (paint Red "[stopped: turn limit reached]")
         CostLimit -> say (paint Red "[stopped: cost limit reached]")
-        Failed e  -> say (paint Red ("error: " <> e))
+        Failed e  -> say (paint Red ("error: " <> printable e))
       total <- readIORef spent
       when (outTurns out > 0) (cfgRemember cfg (sesModel s))
       say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> " | context: " <> tshow (outContext out) <> "]"))
@@ -199,7 +200,7 @@ interactive paint spent restored save cfg = do
         s {sesModel = m, sesBudget = budget} <$ say ("model: " <> m <> ", context budget " <> tshow budget)
       ListTools ->
         s <$ mapM_ (\t -> say (toolName t <> " - " <> toolDescription t)) (visibleTools (sesMode s) (tools s))
-      ShowSystem -> s <$ say (cfgSystem cfg)
+      ShowSystem -> s <$ say (printable (cfgSystem cfg))
       ShowUsage -> do
         total <- readIORef spent
         s <$ say ("session: " <> renderUsage total <> " | context: " <> tshow (sesContext s) <> " of " <> tshow (sesBudget s) <> " budget")

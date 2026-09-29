@@ -89,9 +89,18 @@ Usage lines show cached tokens, e.g. `12000 in (9000 cached) / 300 out`. `--json
 
 It is off by default. In a test on Gemini 3.8 Flash, GPT-6 Luna Pro and Claude Haiku 4.5 with `--reasoning medium`, omitting the blocks never failed and answers were equally correct, while keeping them raised Gemini's cost by about 60%. Gemini's blocks are thought signatures bound to the upstream that issued them. OpenRouter can route one conversation to Google Vertex and then to Google AI Studio, which rejects Vertex signatures ("Corrupted thought signature"). hilda then drops all kept reasoning from the history, prints `[the provider rejected the kept reasoning; resending without it]` (`reasoning_dropped` in `--stream-json`), and resends once.
 
-Color is on when the output is a terminal. `NO_COLOR` or `TERM=dumb` turns it off.
+Color and markdown styling are on when the output is a terminal, and can be turned off separately:
 
-Replies stream. The REPL prints text as it arrives. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. It reads `[thinking Ns]` while a reasoning model reasons; the reasoning itself is not printed. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.
+| | Status and tool lines colored | Reply text styled as markdown |
+|-|-|-|
+| default | yes | yes |
+| `--no-color` | no | yes |
+| `--markdown=never` | yes | no |
+| `--no-color --markdown=never`, `NO_COLOR` or `TERM=dumb` | no | no |
+
+`--markdown=always` styles reply text even when piped (e.g. to `less -R`) or when `NO_COLOR` is set. The default, `auto`, styles only on a terminal.
+
+Replies stream. The REPL prints text as it arrives. Markdown styling covers headings, bold, italic and code spans, and drops their markers. Code-block fences print dim; block content prints as written, as do links, tables and lists. Model text shows control characters escaped (`\x1b`) whenever it reaches a terminal or is styled, so a reply cannot send terminal escape sequences. An unstyled headless answer piped elsewhere is printed unchanged. On a terminal, a `[waiting Ns]` line counts up until the first text and is then erased. It reads `[thinking Ns]` while a reasoning model reasons; the reasoning itself is not printed. Tool-call arguments are not shown while they stream, so a long `write` shows only the waiting line. Headless text mode prints only the final answer, because narration and answer cannot be told apart until the reply ends. A server that ignores `stream` and returns plain JSON also works.
 
 `--stream-json` prints `text_delta` and `reasoning_delta` lines as the reply streams, and `text`, `tool_call` and `tool_result` lines as they happen. Its last line is the `result` object that `--json` prints alone.
 

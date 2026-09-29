@@ -7,6 +7,7 @@ import Hilda.App (Output (..), versionText)
 import Hilda.Cli
 import Hilda.Policy (Mode (..))
 import Hilda.Provider
+import Hilda.Render (When (..))
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, renderFailure)
 import Test.Hspec
 
@@ -42,6 +43,11 @@ spec = do
       fmap optOutput (parse ["-p", "hi", "--stream-json"]) `shouldBe` Just StreamJson
     it "rejects --json with --stream-json" $
       parse ["-p", "hi", "--json", "--stream-json"] `shouldBe` Nothing
+    it "parses --no-color and --markdown independently" $ do
+      fmap (\o -> (optNoColor o, optMarkdown o)) (parse ["--no-color"]) `shouldBe` Just (True, Auto)
+      fmap (\o -> (optNoColor o, optMarkdown o)) (parse ["--markdown=never"]) `shouldBe` Just (False, Never)
+      fmap optMarkdown (parse ["--markdown", "always"]) `shouldBe` Just Always
+      parse ["--markdown=sometimes"] `shouldBe` Nothing
     it "defaults to text output, yolo and AGENTS.md discovery" $ do
       fmap optOutput (parse []) `shouldBe` Just Text
       fmap optMode (parse []) `shouldBe` Just Yolo

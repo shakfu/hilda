@@ -16,6 +16,8 @@ spec = do
     let bash = ToolCall "c1" "bash" "{\"command\":\"git status\"}"
     it "starts a tool line with the tool and its main argument" $
       renderEvent plain (CallStarted bash) `shouldBe` Partial "[bash] git status "
+    it "escapes control characters in narration" $
+      renderEvent plain (Narration "x\ESC]0;title\a") `shouldBe` Full "x\\x1b]0;title\\x07"
     it "finishes the line with an estimated token count" $
       renderEvent plain (CallFinished bash (Right (T.replicate 40 "x"))) `shouldBe` Full "-> ~10"
     it "reports context trimming" $ do
@@ -23,6 +25,8 @@ spec = do
       renderEvent plain (ContextTrimmed 1 400) `shouldBe` Full "[context: elided 1 old tool message, ~100 tokens]"
     it "warns when a cost limit cannot work" $
       renderEvent plain CostUnknown `shouldBe` Full "[--max-cost has no effect: the provider reports no cost]"
+    it "escapes control characters in tool errors" $
+      renderEvent plain (CallFinished (ToolCall "c" "read" "{}") (Left "no file a\ESC[2Jb")) `shouldBe` Full "-> error: no file a\\x1b[2Jb"
     it "finishes the line with the error" $
       renderEvent plain (CallFinished bash (Left "boom")) `shouldBe` Full "-> error: boom"
     it "wraps colored text in ANSI codes" $ do
@@ -40,6 +44,15 @@ spec = do
       let s = callSummary (ToolCall "c" "bash" ("{\"command\":\"" <> T.replicate 100 "a" <> "\\nb\"}"))
       T.length s `shouldBe` 80
       s `shouldSatisfy` T.isSuffixOf ".."
+
+  describe "markdownEnabled" $
+    it "forces always and never; auto needs a terminal" $
+      withSystemTempFile "md" $ \_ h ->
+        mapM (`markdownEnabled` h) [Always, Auto, Never] `shouldReturn` [True, False, False]
+
+  describe "printable" $
+    it "escapes controls but keeps newlines, tabs and format characters" $
+      printable "a\ESC\n\tb\x200d" `shouldBe` "a\\x1b\n\tb\x200d"
 
   describe "confirmDetail" $ do
     it "shows the whole command, however long" $ do
@@ -68,16 +81,23 @@ spec = do
           hClose h
           (,) <$> readFile path <*> (reverse <$> readIORef seen)
     it "erases the waiting line before streamed text and ends the line" $
-      run (Live True True) (streams 0) `shouldReturn` ("\r\ESC[Khello\n", [TextDelta "hel", TextDelta "lo"])
+      run (Live True True False) (streams 0) `shouldReturn` ("\r\ESC[Khello\n", [TextDelta "hel", TextDelta "lo"])
     it "counts seconds until the first text" $
-      fmap fst (run (Live True True) (streams 1500000)) `shouldReturn` "\r[waiting 1s]\r\ESC[Khello\n"
+      fmap fst (run (Live True True False) (streams 1500000)) `shouldReturn` "\r[waiting 1s]\r\ESC[Khello\n"
     it "only erases when not echoing" $
-      run (Live True False) (streams 0) `shouldReturn` ("\r\ESC[K", [TextDelta "hel", TextDelta "lo"])
+      run (Live True False False) (streams 0) `shouldReturn` ("\r\ESC[K", [TextDelta "hel", TextDelta "lo"])
     it "says thinking once reasoning arrives" $ do
       let thinks = \sink _ -> sink (ReasoningDelta "hmm") >> threadDelay 1500000 >> sink (TextDelta "ok") >> pure reply
-      fmap fst (run (Live True True) thinks) `shouldReturn` "\r[thinking 1s]\r\ESC[Kok\n"
+      fmap fst (run (Live True True False) thinks) `shouldReturn` "\r[thinking 1s]\r\ESC[Kok\n"
     it "echoes without escape codes when there is no ticker" $
-      fmap fst (run (Live False True) (streams 0)) `shouldReturn` "hello\n"
+      fmap fst (run (Live False True False) (streams 0)) `shouldReturn` "hello\n"
+    it "styles markdown across pieces and flushes held text at the end" $ do
+      let md = \sink _ -> mapM_ (sink . TextDelta) ["a *", "*b*", "* *"] >> pure reply
+      fmap fst (run (Live False True True) md) `shouldReturn` "a \ESC[0m\ESC[1mb\ESC[0m *\n"
+    it "escapes control characters in echoed text" $ do
+      let esc = \sink _ -> sink (TextDelta "a\ESC[2Jb\r") >> pure reply
+      fmap fst (run (Live False True False) esc) `shouldReturn` "a\\x1b[2Jb\\x0d\n"
+      fmap fst (run (Live False True True) esc) `shouldReturn` "a\\x1b[2Jb\\x0d\n"
 
   describe "renderUsage" $ do
     it "omits cost when the provider reports none" $

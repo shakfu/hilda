@@ -14,6 +14,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 - Multi-line prompts in the REPL: Shift+Enter or Ctrl+J starts a new line, and pasted text stays one prompt. The line editor is now isocline, not haskeline, which reads single lines only. isocline 1.1.0 stops after two parameters of xterm's `ESC [ 27 ; mods ; key ~`, which kitty, WezTerm and Ghostty send for Shift+Enter, so hilda vendors it with an 8-line parser fix (`vendor/isocline.patch`) until upstream parses the sequence. Ctrl-C at an `ask` confirmation now declines the call instead of abandoning the turn. The binary no longer links libtinfo.
 
+- Reply text is styled as markdown on a terminal: headings, bold, italic, code spans and code-block fences. The REPL styles it as it streams. A line-at-a-time renderer would delay a one-line paragraph until it ends, so hilda styles characters as they arrive and holds back only an ambiguous marker such as a trailing `*`. Styles end at each newline, so an unclosed marker affects one line.
+
+  `--markdown=always|auto|never` sets styling; `auto`, the default, styles on a terminal without `NO_COLOR`. `--no-color` turns off color of status and tool lines; `NO_COLOR` turns off both. Separate flags let a user keep one without the other. `always` overrides `NO_COLOR`, as no-color.org asks of explicit flags, and serves pagers such as `less -R`.
+
+- Model text shows control characters escaped (`\x1b`) in the REPL, in narration, and in headless answers that are styled or reach a terminal. Provider errors, tool errors and `/system` (which includes AGENTS.md) are escaped too, as the confirmation prompt already did. Before, a reply could clear the screen or retitle the terminal. Format characters such as bidi overrides are not escaped: prose uses RLM, and emoji use ZWJ. An unstyled answer piped elsewhere is not escaped, since it may be data.
+
 - CI on GitHub Actions: build, tests, and a Haddock coverage check that fails below 100%.
 
 ### Changed

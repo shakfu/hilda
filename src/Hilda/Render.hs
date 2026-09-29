@@ -6,6 +6,9 @@ module Hilda.Render
   , ansi
   , plain
   , colorEnabled
+  , When (..)
+  , parseWhen
+  , markdownEnabled
   , ansiTerminal
   , Live (..)
   , liveOutput
@@ -15,6 +18,7 @@ module Hilda.Render
   , formatCost
   , callSummary
   , estimateTokens
+  , printable
   , confirmDetail
   , confirmQuestion
   , isYes
@@ -37,6 +41,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import Data.Text.Encoding (encodeUtf8)
 import Hilda.Agent (Event (..))
+import Hilda.Markdown (endMarkdown, feedMarkdown, markdown)
 import Hilda.Types
 import System.Environment (lookupEnv)
 import System.IO (Handle, hFlush, hIsTerminalDevice)
@@ -73,10 +78,31 @@ colorEnabled h = do
   noColor <- maybe False (not . null) <$> lookupEnv "NO_COLOR"
   (&& not noColor) <$> ansiTerminal h
 
+-- | A @--markdown@ setting.
+data When = Always | Auto | Never
+  deriving stock (Eq, Show)
+
+-- | Parse @always@, @auto@ or @never@.
+parseWhen :: Text -> Maybe When
+parseWhen = \case
+  "always" -> Just Always
+  "auto" -> Just Auto
+  "never" -> Just Never
+  _ -> Nothing
+
+-- | Whether to style text for @h@ as markdown. 'Auto' follows 'colorEnabled';
+-- 'Always' overrides NO_COLOR, as an explicit flag should (no-color.org).
+markdownEnabled :: When -> Handle -> IO Bool
+markdownEnabled w h = case w of
+  Always -> pure True
+  Never -> pure False
+  Auto -> colorEnabled h
+
 -- | What a terminal shows during a model call.
 data Live = Live
   { liveTicker :: Bool -- ^ Count @[waiting Ns]@ until the first text arrives.
   , liveEcho   :: Bool -- ^ Print reply text as it streams.
+  , liveMarkdown :: Bool -- ^ Style echoed text as markdown ("Hilda.Markdown").
   }
 
 -- | Wrap a backend for terminal output on @h@. The waiting line reads
@@ -88,13 +114,17 @@ liveOutput h paint live complete sink req = do
   label <- newIORef ("waiting" :: Text)
   ticker <- newMVar =<< if liveTicker live then Just <$> forkIO (tick label 1) else pure Nothing
   lastChar <- newIORef Nothing
+  md <- newIORef markdown
   let stop = modifyMVar_ ticker $ \t -> Nothing <$ mapM_ (\tid -> killThread tid >> put "\r\ESC[K") t
       echo d = when (liveEcho live && not (T.null d)) $ do
         stop
-        put d
+        if liveMarkdown live
+          then readIORef md >>= \m -> let (out, m') = feedMarkdown (printable d) m in put out >> writeIORef md m'
+          else put (printable d)
         writeIORef lastChar (Just (T.last d))
       finish = do
         stop
+        when (liveMarkdown live) (put . endMarkdown =<< readIORef md)
         readIORef lastChar >>= \c -> when (maybe False (/= '\n') c) (put "\n")
       observe = \case
         TextDelta d -> echo d
@@ -115,10 +145,10 @@ data Line = Partial Text | Full Text
 -- | One line per tool call: @[bash] git status -> ~40@ (estimated tokens).
 renderEvent :: Paint -> Event -> Line
 renderEvent paint = \case
-  Narration t -> Full (paint Dim (T.strip t))
+  Narration t -> Full (paint Dim (printable (T.strip t)))
   CallStarted c -> Partial (paint Cyan ("[" <> callName c <> "]") <> " " <> callSummary c <> " ")
   CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
-  CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> elide 100 e))
+  CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> printable (elide 100 e)))
   CostUnknown -> Full (paint Red "[--max-cost has no effect: the provider reports no cost]")
   ReasoningDropped -> Full (paint Red "[the provider rejected the kept reasoning; resending without it]")
   ContextTrimmed n chars ->
@@ -175,8 +205,17 @@ confirmQuestion c = "allow [" <> callName c <> "]? [y/N] "
 -- | Escape control characters other than newline and tab, and invisible
 -- format characters such as bidi overrides, which can reorder a command.
 visible :: Text -> Text
-visible = T.concatMap $ \ch ->
-  if (isControl ch || generalCategory ch == Format) && ch /= '\n' && ch /= '\t'
+visible = escapeWhere (\ch -> isControl ch || generalCategory ch == Format)
+
+-- | Escape control characters other than newline and tab, so model text
+-- cannot send terminal escape sequences. Format characters pass, since
+-- prose and emoji use them (RLM, ZWJ).
+printable :: Text -> Text
+printable = escapeWhere isControl
+
+escapeWhere :: (Char -> Bool) -> Text -> Text
+escapeWhere p = T.concatMap $ \ch ->
+  if p ch && ch /= '\n' && ch /= '\t'
     then T.pack (printf "\\x%02x" (fromEnum ch))
     else T.singleton ch
 
