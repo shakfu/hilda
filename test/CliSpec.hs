@@ -88,6 +88,30 @@ spec = do
       parse ["--max-turns", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
       parse ["--mode", "sudo"] `shouldBe` Nothing
+    it "collects positional prompt words around options" $
+      fmap optWords (parse ["fix", "-m", "x", "the", "build"]) `shouldBe` Just ["fix", "the", "build"]
+    it "takes words after -- as the prompt, even with a leading -" $
+      fmap optWords (parse ["-m", "x", "--", "-p", "is", "wrong"]) `shouldBe` Just ["-p", "is", "wrong"]
+
+  describe "start" $ do
+    let startWith args = maybe (Left "parse failed") start (parse args)
+    it "starts a plain REPL without words" $
+      startWith [] `shouldBe` Right (Interactive Nothing)
+    it "joins words with single spaces as the first REPL entry" $
+      startWith ["--", "fix  the", "build"] `shouldBe` Right (Interactive (Just "fix  the build"))
+    it "resumes a session and enters the prompt with --continue" $
+      startWith ["-c", "go", "on"] `shouldBe` Right (Interactive (Just "go on"))
+    it "runs -p headless and reads stdin for -p -" $ do
+      startWith ["-p", "hi"] `shouldBe` Right (Headless (Just "hi"))
+      startWith ["-p", "-"] `shouldBe` Right (Headless Nothing)
+    it "rejects -p with positional words" $
+      startWith ["-p", "hi", "there"] `shouldSatisfy` isLeft
+    it "rejects --json and --stream-json without -p, even with words" $ do
+      startWith ["--json", "--", "task"] `shouldSatisfy` isLeft
+      startWith ["--stream-json", "task"] `shouldSatisfy` isLeft
+      startWith ["--json"] `shouldSatisfy` isLeft
+    it "rejects --continue with -p" $
+      startWith ["-c", "-p", "hi"] `shouldSatisfy` isLeft
 
   describe "contextBudget" $
     it "takes half the context window, at most 100000" $

@@ -57,12 +57,15 @@ Pass `-m NAME` once per provider. hilda saves the last model used with each prov
 
 ```sh
 hilda -m vendor/model                           # REPL
+hilda -m vendor/model -- "fix the failing test" # REPL that starts on this prompt
 hilda -p "fix the failing test"                 # one prompt, answer on stdout
 git diff | hilda -p -                           # prompt from stdin
 hilda -p "list TODOs" --json                    # one JSON object
 hilda -p "list TODOs" --stream-json             # one JSON line per event
 hilda --append-system-file style.md             # REPL with extra instructions
 ```
+
+Without `-p`, positional words start the REPL and enter it as the first line, joined by single spaces. The REPL treats it as typed: a leading `/` runs a command, `//` sends a prompt starting with `/`, and a blank prompt is ignored. Put `--` before a prompt that starts with `-`. Positional words cannot be combined with `-p`, `--json` or `--stream-json`. With `-c`, the prompt continues the resumed session.
 
 Text mode prints the answer on stdout and tool activity on stderr, one line per tool call:
 

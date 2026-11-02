@@ -3,7 +3,9 @@ module Hilda.Cli
   ( Options (..)
   , SystemSource (..)
   , AgentsSource (..)
+  , Start (..)
   , optionsInfo
+  , start
   , resolveProvider
   , contextBudget
   , main
@@ -62,6 +64,7 @@ data Options = Options
   , optContinue :: Bool
   , optNoColor  :: Bool
   , optMarkdown :: When
+  , optWords    :: [Text] -- ^ Positional PROMPT words.
   }
   deriving stock (Eq, Show)
 
@@ -70,7 +73,7 @@ optionsInfo :: ParserInfo Options
 optionsInfo =
   info (options <**> versionFlag <**> helper) $
     fullDesc
-      <> progDesc "Coding agent for OpenAI-compatible APIs and OpenRouter. Starts a REPL unless -p is given."
+      <> progDesc "Coding agent for OpenAI-compatible APIs and OpenRouter. Starts a REPL unless -p is given; PROMPT... becomes the REPL's first entry."
       <> footerDoc
         ( Just . vsep . map pretty $
             [ "Provider: openrouter when OPENROUTER_API_KEY is set, else openai."
@@ -145,9 +148,33 @@ options =
       ( long "markdown" <> metavar "always|auto|never" <> value Auto
           <> help "Style reply text as markdown. auto: on a terminal without NO_COLOR (default)"
       )
+    <*> many
+      ( strArgument
+          ( metavar "PROMPT..."
+              <> help "Start the REPL and enter these words, joined by spaces, as if typed. A leading / runs a command; // sends a prompt starting with /. Put -- before a prompt that starts with -"
+          )
+      )
   where
     positive :: (Read a, Num a, Ord a) => ReadM a
     positive = auto >>= \n -> if n > 0 then pure n else readerError "must be positive"
+
+-- | What 'main' runs.
+data Start
+  = Headless (Maybe Text)    -- ^ @-p@: the prompt, or Nothing to read stdin.
+  | Interactive (Maybe Text) -- ^ The REPL, with PROMPT... as its first entry.
+  deriving stock (Eq, Show)
+
+-- | Choose what to run, or say which options conflict.
+start :: Options -> Either Text Start
+start o = case (optPrompt o, optWords o) of
+  (Just _, _ : _) -> Left "PROMPT... starts the REPL; it cannot be used with -p"
+  (Just _, []) | optContinue o -> Left "--continue resumes the REPL; it cannot be used with -p"
+  (Just "-", []) -> Right (Headless Nothing)
+  (Just p, []) -> Right (Headless (Just p))
+  (Nothing, ws)
+    | optOutput o /= Text -> Left "--json and --stream-json need a prompt (-p); PROMPT... starts the REPL"
+    | null ws -> Right (Interactive Nothing)
+    | otherwise -> Right (Interactive (Just (T.unwords ws)))
 
 -- | Pick the backend, key and model. Pure over the environment lookup and
 -- the remembered models, so it is testable.
@@ -224,6 +251,7 @@ knownContext p model
 main :: IO ()
 main = do
   o <- execParser optionsInfo
+  what <- either die' pure (start o)
   env <- getEnvironment
   statePath <- stateFile
   models <- loadMap statePath
@@ -248,17 +276,14 @@ main = do
           , cfgColor = not (optNoColor o)
           , cfgMarkdown = optMarkdown o
           }
-  case optPrompt o of
-    Just _ | optContinue o -> die' "--continue resumes the REPL; it cannot be used with -p"
-    Just "-" -> decodeUtf8Lenient <$> BS.getContents >>= runHeadless cfg (optOutput o) >>= exitWith
-    Just p -> runHeadless cfg (optOutput o) p >>= exitWith
-    Nothing
-      | optOutput o /= Text -> die' "--json and --stream-json need a prompt (-p)"
-      | otherwise -> do
-          restored <-
-            if optContinue o
-              then loadSession sessionPath >>= either (\why -> [] <$ TIO.hPutStrLn stderr ("hilda: " <> why <> "; starting fresh")) pure
-              else pure []
-          runRepl cfg restored (saveSession sessionPath)
+  case what of
+    Headless Nothing -> decodeUtf8Lenient <$> BS.getContents >>= runHeadless cfg (optOutput o) >>= exitWith
+    Headless (Just p) -> runHeadless cfg (optOutput o) p >>= exitWith
+    Interactive initial -> do
+      restored <-
+        if optContinue o
+          then loadSession sessionPath >>= either (\why -> [] <$ TIO.hPutStrLn stderr ("hilda: " <> why <> "; starting fresh")) pure
+          else pure []
+      runRepl cfg initial restored (saveSession sessionPath)
   where
     die' msg = TIO.hPutStrLn stderr ("hilda: " <> msg) >> exitFailure

@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ### Added
 
+- `hilda [options] [--] PROMPT...` starts the REPL and enters PROMPT as its first line, so a launcher can open an interactive session that starts working at once. Combining it with `-p`, `--json` or `--stream-json` is an error.
+
 - `--reasoning EFFORT` asks the model to reason, sent as `reasoning.effort` to OpenRouter and `reasoning_effort` to the `openai` provider. Values are OpenRouter's: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Without it, Anthropic models do not reason, so `--keep-reasoning` had nothing to keep for them.
 
 - `-c`/`--continue` resumes the last REPL session in the working directory. The REPL saves its history after each turn and `/clear`, not only on exit, so a closed terminal or a stray Ctrl-D loses at most the current turn. Files are per directory under `$XDG_STATE_HOME/hilda/sessions/`, in a 0700 directory since transcripts hold file contents. Per-directory files, not one shared file, avoid lost updates between REPLs in different projects.

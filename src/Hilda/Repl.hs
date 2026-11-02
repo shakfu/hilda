@@ -6,11 +6,12 @@ module Hilda.Repl
   , Input (..)
   , parseInput
   , runRepl
+  , interactive
   , tally
   ) where
 
 import Control.Exception (AsyncException (UserInterrupt), IOException, handle, throwIO, try)
-import Control.Monad (void, when)
+import Control.Monad (mfilter, void, when)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
@@ -22,7 +23,7 @@ import Hilda.Render
 import Hilda.Tools
 import Hilda.Types
 import qualified Data.Text.IO as TIO
-import System.Console.Isocline (enableBraceInsertion, enableBraceMatching, enableColor, enableHighlight, enableHint, enableMultiline, historyRemoveLast, readlineMaybe, setHistory)
+import System.Console.Isocline (enableBraceInsertion, enableBraceMatching, enableColor, enableHighlight, enableHint, enableMultiline, historyAdd, historyRemoveLast, readlineMaybe, setHistory)
 import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.FilePath ((</>))
 import System.IO (hFlush, stdout)
@@ -84,10 +85,10 @@ tally ref complete sink req = do
   pure r
 
 -- | Streams reply text to stdout, with a waiting line before it on a
--- terminal. Starts from @restored@ and passes the history to @save@ after
--- each turn and @/clear@.
-runRepl :: Config -> [Message] -> ([Message] -> IO ()) -> IO ()
-runRepl cfg0 restored save = do
+-- terminal. Starts from @restored@, enters @initial@ as the first line if
+-- given, and passes the history to @save@ after each turn and @/clear@.
+runRepl :: Config -> Maybe Text -> [Message] -> ([Message] -> IO ()) -> IO ()
+runRepl cfg0 initial restored save = do
   terminal <- ansiTerminal stdout
   color <- (cfgColor cfg0 &&) <$> colorEnabled stdout
   styled <- markdownEnabled (cfgMarkdown cfg0) stdout
@@ -96,7 +97,8 @@ runRepl cfg0 restored save = do
   dir <- getXdgDirectory XdgState "hilda"
   createDirectoryIfMissing True dir
   setupEditor color (dir </> "history")
-  interactive paint spent restored save cfg0 {cfgComplete = tally spent (liveOutput stdout paint (Live terminal True styled) (cfgComplete cfg0))}
+  mapM_ (historyAdd . T.unpack) (mfilter (not . T.null . T.strip) initial)
+  interactive (fmap T.pack <$> readlineMaybe "hilda") initial paint spent restored save cfg0 {cfgComplete = tally spent (liveOutput stdout paint (Live terminal True styled) (cfgComplete cfg0))}
 
 -- | Line editing with history in @path@ and multi-line entries. Brace
 -- insertion, hints and highlighting are off: prompts are prose, not code.
@@ -107,14 +109,19 @@ setupEditor color path = do
   void (enableColor color)
   void (enableMultiline True)
 
--- | @spent@ holds the session's usage; the backend in @cfg@ adds to it.
-interactive :: Paint -> IORef Usage -> [Message] -> ([Message] -> IO ()) -> Config -> IO ()
-interactive paint spent restored save cfg = do
+-- | The session loop over lines from @readLine@ (Nothing ends it). @initial@
+-- is handled first, as a typed line. @spent@ holds the session's usage; the
+-- backend in @cfg@ adds to it.
+interactive :: IO (Maybe Text) -> Maybe Text -> Paint -> IORef Usage -> [Message] -> ([Message] -> IO ()) -> Config -> IO ()
+interactive readLine initial paint spent restored save cfg = do
   say (paint BoldMagenta versionText)
   say (paint Dim ("model " <> cfgModel cfg <> ", mode " <> modeName (cfgMode cfg) <> ". /help for commands, Shift+Enter for a new line, Ctrl-D to exit."))
   when (not (null restored)) (say (paint Dim ("resumed " <> tshow (length restored) <> " messages")))
   budget <- cfgBudget cfg (cfgModel cfg)
-  _ <- loop (Session (cfgMode cfg) (cfgModel cfg) (fresh <> restored) 0 0 budget)
+  let s0 = Session (cfgMode cfg) (cfgModel cfg) (fresh <> restored) 0 0 budget
+  _ <- case T.strip <$> initial of
+    Just t | not (T.null t) -> say ("hilda> " <> printable t) >> entry s0 t
+    _ -> loop s0
   total <- readIORef spent
   say (paint Dim ("session: " <> renderUsage total))
   where
@@ -122,15 +129,14 @@ interactive paint spent restored save cfg = do
     tools s = builtinTools (resultLimitFor (sesBudget s))
 
     -- Ctrl-C at the prompt clears the entry and reads as "".
-    loop s =
-      readlineMaybe "hilda" >>= \case
-        Nothing -> pure s
-        Just raw -> case T.strip (T.pack raw) of
-          "" -> loop s
-          line -> case parseInput line of
-            Run Quit    -> pure s
-            Run cmd     -> run cmd s >>= loop
-            Prompt text -> turn s text >>= loop
+    loop s = readLine >>= maybe (pure s) (entry s)
+
+    entry s raw = case T.strip raw of
+      "" -> loop s
+      line -> case parseInput line of
+        Run Quit    -> pure s
+        Run cmd     -> run cmd s >>= loop
+        Prompt text -> turn s text >>= loop
 
     -- Ctrl-C abandons the turn and keeps the history from before it. GHC
     -- raises UserInterrupt in the main thread; the editor is not reading, so
