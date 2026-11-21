@@ -15,7 +15,7 @@ import Hilda.Tools (Effect (..), Tool (..))
 
 -- | Permission mode, set by @--mode@ or @/mode@.
 data Mode
-  = Yolo     -- ^ Run every tool without asking. The default.
+  = Yolo     -- ^ Run every tool without asking. The default, except under @--acp@.
   | Ask      -- ^ Confirm each write, edit and shell command.
   | ReadOnly -- ^ Only tools that observe; others are hidden and refused.
   deriving stock (Eq, Show, Enum, Bounded)

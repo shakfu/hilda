@@ -1,9 +1,11 @@
 module Main (main) where
 
+import qualified AcpSpec
 import qualified AgentSpec
 import qualified AppSpec
 import qualified CliSpec
 import qualified ContextSpec
+import qualified HeadlessSpec
 import qualified MarkdownSpec
 import qualified PolicySpec
 import qualified PromptSpec
@@ -17,10 +19,12 @@ import Test.Hspec
 
 main :: IO ()
 main = hspec $ do
+  describe "Acp" AcpSpec.spec
   describe "Agent" AgentSpec.spec
   describe "App" AppSpec.spec
   describe "Cli" CliSpec.spec
   describe "Context" ContextSpec.spec
+  describe "Headless" HeadlessSpec.spec
   describe "Markdown" MarkdownSpec.spec
   describe "Policy" PolicySpec.spec
   describe "Prompt" PromptSpec.spec

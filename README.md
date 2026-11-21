@@ -63,6 +63,7 @@ git diff | hilda -p -                           # prompt from stdin
 hilda -p "list TODOs" --json                    # one JSON object
 hilda -p "list TODOs" --stream-json             # one JSON line per event
 hilda --append-system-file style.md             # REPL with extra instructions
+hilda --acp                                     # ACP server for an editor or broker
 ```
 
 Without `-p`, positional words start the REPL and enter it as the first line, joined by single spaces. The REPL treats it as typed: a leading `/` runs a command, `//` sends a prompt starting with `/`, and a blank prompt is ignored. Put `--` before a prompt that starts with `-`. Positional words cannot be combined with `-p`, `--json` or `--stream-json`. With `-c`, the prompt continues the resumed session.
@@ -113,7 +114,7 @@ hilda keeps the history under `--context-budget` tokens, estimated at four chara
 
 - The last assistant message and the results after it are never elided. Neither is user or assistant text, so a history made mostly of text can still exceed the budget.
 - Elision is written into the history, so the start of the conversation stays the same between calls and provider prompt caching keeps working.
-- Default on OpenRouter: half the model's context window, at most 100,000. The window is the smallest among the model's endpoints, looked up once and cached in `$XDG_STATE_HOME/hilda/contexts.json`. Elsewhere, or if the lookup fails, the default is 100,000. `/model` in the REPL looks up the new model's budget; an explicit `--context-budget` stays.
+- Default on OpenRouter, or with `--context-window TOKENS`: half the model's context window, at most 100,000. The window is the smallest among the model's endpoints, looked up once and cached in `$XDG_STATE_HOME/hilda/contexts.json`. Elsewhere, or if the lookup fails, the default is 100,000. `/model` in the REPL looks up the new model's budget; an explicit `--context-budget` stays.
 - With a local server, set the budget below the model's context window. Local models often have 8,000 to 32,000 tokens.
 - Each tool result is limited to a quarter of the budget: 30,000 characters at the default, 8,000 at a budget of 8,000 tokens. Several recent results then fit even in a small budget.
 
@@ -138,8 +139,8 @@ Other tool output over the result limit (a quarter of `--context-budget`, at mos
 
 | `-M`, `--mode` | read | write, edit, bash |
 |-|-|-|
-| `yolo` (default) | run | run |
-| `ask` | run | confirm on the terminal, showing every argument in full; refused without a terminal |
+| `yolo` (default; `ask` under `--acp`) | run | run |
+| `ask` | run | confirm on the terminal, showing every argument in full; refused without a terminal. With `--acp`, the client is asked |
 | `read-only` | run | not offered to the model; refused if called |
 
 ## System prompt
@@ -167,3 +168,37 @@ Options:
 ## Sessions
 
 The REPL saves its history after each turn and after `/clear`, one file per working directory, in `$XDG_STATE_HOME/hilda/sessions/` (mode 0700). `hilda -c` (`--continue`) resumes it. The system prompt is rebuilt from the current options and AGENTS.md files. Session cost starts at zero, so `--max-cost` counts from the resume. Saved transcripts contain file contents and command output. `--continue` works only in the REPL, not with `-p`.
+
+Each `-p` run saves its history under a new session id, a 16-digit hex string, in the same directory. `--json` and `--stream-json` report it as `session_id` in the `result` object; text mode prints it in the usage line on stderr. `hilda --resume ID -p TEXT` sends TEXT as the next prompt after that history and saves it back under the same id. In the REPL, `--resume ID` resumes the session and saves each turn to it. hilda refuses a session saved in another working directory, since its history names files there. An unknown or invalid id exits with status 1; with `--json` the `result` object has `stop: "error"` and the reason in `error`. `-c` reads only the REPL's per-directory file, so `-p` runs never overwrite it. Two runs that resume the same id at once both succeed, and the later save wins.
+
+`--no-session` saves no transcript: a `-p` run reports `session_id: null`, and the REPL keeps no history for `-c`. `--resume` and `-c` still read a saved session. Each run deletes the id sessions last saved more than `HILDA_SESSION_DAYS` days ago (default 30; 0 keeps all), so an id older than that no longer resumes. The REPL's per-directory files are kept. ACP sessions are id sessions too; each prompt saves the file again, so a session in use is not deleted.
+
+```sh
+id=$(hilda -p "read main.c" --json | jq -r .session_id)
+hilda --resume "$id" -p "now fix the leak" --json | jq -r .result
+```
+
+## ACP
+
+`hilda --acp` serves the [Agent Client Protocol](https://agentclientprotocol.com/protocol/), version 1, on stdin and stdout. An editor such as Zed, or the minos broker (`minosb -agent acp -- hilda --acp`), runs it as a subprocess. stdout carries only ACP messages, one JSON-RPC object per line; warnings go to stderr. `--acp` cannot be combined with `-p`, `--json`, `--stream-json`, PROMPT..., `-c` or `--resume`.
+
+```sh
+hilda --acp -P openrouter -m vendor/model
+```
+
+- **Capabilities:** `loadSession`; text and `resource_link` prompt blocks. A prompt with neither is refused with `-32602`. A resource link reaches the model as its path, which it can read with `read`. No images, audio, embedded context or MCP: `mcpServers` is accepted and ignored. hilda uses its own tools, never the client's `fs/*` or `terminal/*`.
+- **Sessions:** `session/new` takes the working directory for tools and AGENTS.md, and saves the session at once, so `session/load` finds it before any prompt. Sessions are the id sessions of `-p` runs, so `hilda --resume ID` continues an ACP session in the same directory, and `session/load` loads a `-p` run's `session_id`. `session/load` replays the history as `user_message_chunk`, `agent_message_chunk`, `tool_call` and `tool_call_update`. The session file keeps the session's cost, so `--max-cost` and `usage_update` count on after a load.
+- **Updates:** reply text streams as `agent_message_chunk`, reasoning as `agent_thought_chunk`. Each tool call is a `tool_call` with `kind` `read`, `edit` or `execute`, then `tool_call_update` with the result. A call denied without asking goes from `pending` to `failed`. `toolCallId` is the model's id prefixed with the reply's number in the session, since models reuse ids across replies. A `usage_update` ends each turn when the context window is known: `used` is the last prompt's tokens, `size` the window, and `cost` the session's total, in `USD` on OpenRouter and `credits` elsewhere. OpenRouter reports the window; elsewhere pass `--context-window TOKENS`. Without a window, no `usage_update` is sent, since `size` is required.
+- **Permissions:** `--acp` defaults to `-M ask`: each write, edit and bash call is a `session/request_permission` offering allow or reject, once or always. "Always" holds for that tool for the rest of the session. A cancelled request is a denial. Pass `-M yolo` to ask nothing; `-M read-only` offers the model only `read`.
+- **Stop reasons:** `end_turn`; `max_tokens` when the reply hit the output limit (`finish_reason` `length`); `refusal` for `content_filter` or a provider refusal, which drops the prompt and its turn from the history but keeps the cost; `max_turn_requests` for `--max-turns`, and for `--max-cost`, which also stops before a model request; `cancelled` after `session/cancel`. A provider error answers the prompt with a JSON-RPC error. `--max-cost` counts the whole session.
+- **Cancel:** `session/cancel` stops the model call and kills a running `bash` process group. Calls still running or awaiting permission end `failed`. The session keeps its history from before the prompt, as Ctrl-C does in the REPL.
+
+Prompts run one at a time across sessions, since tools resolve paths against the process's working directory. Relative `--system-file`, `--append-system-file` and `--agents` paths resolve against the directory hilda started in.
+
+Conformance with the minos suite, against `test/acp-mock.py`:
+
+```sh
+python3 test/acp-mock.py 18765 &
+cd ../minos && ACP_STRICT=1 ACP_EXPECT_USAGE=1 ACP_SLOW_PROMPT=slow ACP_PERMISSION_PROMPT=permission make acp-conformance \
+  ACP_AGENT="$(cd ../hilda && cabal list-bin hilda) --acp -P openai --base-url http://127.0.0.1:18765/v1 -m mock -M ask --context-window 128000"
+```

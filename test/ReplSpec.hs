@@ -22,8 +22,8 @@ session initial rest = do
   let readLine = atomicModifyIORef' lines' (\case [] -> ([], Nothing); (l : ls) -> (ls, Just l))
       backend _ r = do
         modifyIORef' seen (const [m | m@(User _) <- reqMessages r])
-        pure (Right (Reply (Just "ok") [] (Usage 1 1 0 Nothing) []))
-      cfg = Config backend OpenAICompatible "m" Yolo "sys" 5 (const (pure 1000)) Nothing (const (pure ())) False Never
+        pure (Right (Reply (Just "ok") [] (Usage 1 1 0 Nothing) [] FinishStop))
+      cfg = Config backend OpenAICompatible "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) False Never
   interactive readLine initial plain spent [] (modifyIORef' saved . const) cfg
   (,) <$> readIORef seen <*> readIORef saved
 
@@ -42,7 +42,7 @@ spec = do
     parseInput "//etc/hosts is wrong" `shouldBe` Prompt "/etc/hosts is wrong"
   it "tallies the usage of every completed call" $ do
     ref <- newIORef mempty
-    let backend _ _ = pure (Right (Reply Nothing [] (Usage 10 2 0 (Just 0.5)) []))
+    let backend _ _ = pure (Right (Reply Nothing [] (Usage 10 2 0 (Just 0.5)) [] FinishStop))
         call = tally ref backend (const (pure ())) (Request "m" [] [])
     _ <- call
     _ <- call

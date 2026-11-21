@@ -8,6 +8,7 @@ module Hilda.Stream
   , finishPartial
   , mergeDetails
   , providerError
+  , finishOf
   ) where
 
 import Data.Aeson
@@ -33,6 +34,7 @@ data Partial = Partial
   , partCalls :: IntMap PartialCall
   , partUsage :: Usage
   , partDetails :: [Value] -- ^ reasoning_details fragments, newest first.
+  , partFinish :: Maybe Finish -- ^ From the last chunk that gave a reason.
   }
 
 -- | A tool call under construction; argument pieces newest first.
@@ -44,7 +46,7 @@ data PartialCall = PartialCall
 
 -- | The state before the first chunk.
 emptyPartial :: Partial
-emptyPartial = Partial [] IM.empty mempty []
+emptyPartial = Partial [] IM.empty mempty [] Nothing
 
 -- | Payloads of the complete @data:@ lines in a buffer, and the incomplete
 -- remainder. Comments (@:@), other fields and blank lines are skipped.
@@ -65,9 +67,9 @@ stepChunk p v = maybe (first T.pack (parseEither (withObject "chunk" chunk) v)) 
     chunk o = do
       usage <- o .:? "usage"
       choices <- o .:? "choices" .!= []
-      delta <- case choices of
-        (c : _) -> withObject "choice" (\c' -> c' .:? "delta" .!= KM.empty) c
-        [] -> pure KM.empty
+      (delta, finish) <- case choices of
+        (c : _) -> withObject "choice" (\c' -> c' .:? "delta" .!= KM.empty >>= \d -> (,) d <$> finishOf c' d) c
+        [] -> pure (KM.empty, Nothing)
       content <- delta .:? "content"
       calls <- traverse callDelta =<< (delta .:? "tool_calls" .!= [])
       -- Models send reasoning as reasoning_details, a plain reasoning
@@ -84,6 +86,8 @@ stepChunk p v = maybe (first T.pack (parseEither (withObject "chunk" chunk) v)) 
             , partCalls = foldl' mergeCall (partCalls p) calls
             , partUsage = fromMaybe (partUsage p) usage
             , partDetails = reverse details <> partDetails p
+            -- A refusal holds even if a later chunk says "stop".
+            , partFinish = if partFinish p == Just FinishRefusal then partFinish p else maybe (partFinish p) Just finish
             }
         , [TextDelta t | Just t <- [text]] <> [ReasoningDelta t | Just t <- [thought], not (T.null t)]
         )
@@ -125,7 +129,7 @@ mergeCall m (CallDelta ix cid name args) = IM.alter (Just . update . fromMaybe (
 
 -- | The completed reply. Calls without an id get @call_N@; empty arguments become @{}@.
 finishPartial :: Partial -> Reply
-finishPartial p = Reply text calls (partUsage p) (mergeDetails (reverse (partDetails p)))
+finishPartial p = Reply text calls (partUsage p) (mergeDetails (reverse (partDetails p))) (fromMaybe FinishStop (partFinish p))
   where
     joined = T.concat (reverse (partText p))
     text = if T.null (T.strip joined) then Nothing else Just joined
@@ -160,6 +164,20 @@ mergeDetails frags = go IS.empty frags
     joined os k v
       | k `elem` ["text", "summary", "data"], ss@(_ : _) <- [s | o <- os, Just (String s) <- [KM.lookup k o]] = String (T.concat ss)
       | otherwise = v
+
+-- | The finish of a choice, given the choice and its message or delta,
+-- or Nothing if it gives none. A refusal is @content_filter@, OpenRouter's
+-- @native_finish_reason@ "refusal" (Anthropic), or a @refusal@ text (OpenAI).
+finishOf :: Object -> Object -> Parser (Maybe Finish)
+finishOf choice msg = do
+  reason <- choice .:? "finish_reason"
+  native <- choice .:? "native_finish_reason"
+  refusal <- msg .:? "refusal"
+  pure $ case () of
+    _
+      | reason == Just ("content_filter" :: Text) || native == Just ("refusal" :: Text) || maybe False (not . T.null) refusal -> Just FinishRefusal
+      | reason == Just "length" -> Just FinishLength
+      | otherwise -> FinishStop <$ reason
 
 -- | The error in a response body, if it is an error object: the message,
 -- else the error's JSON. OpenRouter's message can be a generic "Provider

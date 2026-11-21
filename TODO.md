@@ -28,7 +28,7 @@
 
 - [ ] **1-hour Anthropic cache TTL.** The default 5-minute cache expires during long REPL pauses; 1-hour writes cost more.
 
-- [ ] **`--continue` with `-p`.** Rejected today. Useful for scripted multi-step runs; needs headless runs to save sessions too.
+- [ ] **`--continue` with `-p`.** Rejected today; `--resume ID -p` covers scripted multi-step runs. `-c -p` would need to pick the newest id session for the directory.
 
 ## Watch
 

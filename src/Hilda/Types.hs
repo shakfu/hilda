@@ -7,6 +7,7 @@ module Hilda.Types
   , Message (..)
   , Usage (..)
   , Reply (..)
+  , Finish (..)
   , Request (..)
   , Delta (..)
   , Complete
@@ -58,7 +59,15 @@ data Reply = Reply
   , replyCalls :: [ToolCall]
   , replyUsage :: Usage
   , replyReasoning :: [Value] -- ^ reasoning_details blocks, whole and in order.
+  , replyFinish :: Finish
   }
+  deriving stock (Eq, Show)
+
+-- | Why the model stopped writing a reply.
+data Finish
+  = FinishStop    -- ^ It ended the reply, or the server did not say.
+  | FinishLength  -- ^ The output token limit cut it (@finish_reason@ "length").
+  | FinishRefusal -- ^ It refused: @content_filter@, or a provider's refusal.
   deriving stock (Eq, Show)
 
 -- | One chat-completions request, before encoding.

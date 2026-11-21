@@ -17,7 +17,7 @@ field :: Text -> Value -> Maybe Value
 field k = parseMaybe (withObject "event" (.: Key.fromText k))
 
 cfg :: Config
-cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) Nothing (const (pure ())) True Auto
+cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) True Auto
 
 spec :: Spec
 spec = do
@@ -40,8 +40,9 @@ spec = do
 
   describe "outcomeJson" $
     it "tags the result line and reports the stop reason" $ do
-      let v = outcomeJson cfg (Outcome [] "done" 1 mempty 42 Finished)
+      let v = outcomeJson cfg (Just "ab12") (Outcome [] "done" 1 mempty 42 Finished FinishStop)
       field "type" v `shouldBe` Just (String "result")
+      field "session_id" v `shouldBe` Just (String "ab12")
       field "result" v `shouldBe` Just (String "done")
       field "stop" v `shouldBe` Just (String "finished")
       field "context_tokens" v `shouldBe` Just (Number 42)

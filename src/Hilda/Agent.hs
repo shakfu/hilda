@@ -68,6 +68,7 @@ data Outcome = Outcome
   , outUsage   :: Usage
   , outContext :: Int       -- ^ Prompt tokens of the last model call.
   , outStop    :: Stop
+  , outFinish  :: Finish -- ^ Of the last reply; 'FinishStop' unless 'Finished'.
   }
 
 -- | Append a user prompt to the history and run until the model stops.
@@ -76,10 +77,10 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
   where
     specs = map toolSpec (visibleTools (envMode env) (envTools env))
     go n usage ctx unfitted
-      | n >= envMaxTurns env = pure (Outcome unfitted "" n usage ctx TurnLimit)
+      | n >= envMaxTurns env = pure (Outcome unfitted "" n usage ctx TurnLimit FinishStop)
       -- Checked before a call, never between tool calls and their results,
       -- so the history stays valid for the next prompt.
-      | spentAll usage = pure (Outcome unfitted "" n usage ctx CostLimit)
+      | spentAll usage = pure (Outcome unfitted "" n usage ctx CostLimit FinishStop)
       | otherwise = do
           let (hist, elided, chars) = fitContext (envBudget env) unfitted
           when (elided > 0) (onEvent (envHooks env) (ContextTrimmed elided chars))
@@ -90,8 +91,8 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
               | rejectsReasoning err && any keepsReasoning hist -> do
                   onEvent (envHooks env) ReasoningDropped
                   go n usage ctx (map dropReasoning hist)
-              | otherwise -> pure (Outcome hist "" n usage ctx (Failed err))
-            Right (Reply text calls used reasoning) -> do
+              | otherwise -> pure (Outcome hist "" n usage ctx (Failed err) FinishStop)
+            Right (Reply text calls used reasoning finish) -> do
               when (n == 0 && isJust (envCostLimit env) && isNothing (usageCost used)) $
                 onEvent (envHooks env) CostUnknown
               let hist' = hist <> [Assistant text calls reasoning]
@@ -99,7 +100,7 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
                   -- Providers that report no usage get the estimate.
                   ctx' = if usagePrompt used > 0 then usagePrompt used else historyTokens hist
               if null calls
-                then pure (Outcome hist' (fromMaybe "" text) (n + 1) usage' ctx' Finished)
+                then pure (Outcome hist' (fromMaybe "" text) (n + 1) usage' ctx' Finished finish)
                 else do
                   traverse_ (onEvent (envHooks env) . Narration) text
                   results <- traverse (dispatch env) calls

@@ -72,7 +72,7 @@ spec = do
       confirmDetail (ToolCall "c" "bash" "{oops") `shouldBe` "  arguments: {oops"
 
   describe "liveOutput" $ do
-    let reply = Right (Reply Nothing [] mempty [])
+    let reply = Right (Reply Nothing [] mempty [] FinishStop)
         req = Request "m" [] []
         streams delay = \sink _ -> threadDelay delay >> sink (TextDelta "hel") >> sink (TextDelta "lo") >> pure reply
         run live backend = withSystemTempFile "live" $ \path h -> do

@@ -56,7 +56,15 @@ spec = do
         , "{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}"
         , "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"cost\":0.5}}"
         ]
-        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)) [], [TextDelta "Hel", TextDelta "lo"])
+        `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 2 0 (Just 0.5)) [] FinishStop, [TextDelta "Hel", TextDelta "lo"])
+
+    it "reads truncation and refusal from finish reasons; a refusal holds" $ do
+      let finish = fmap (replyFinish . fst) . fold
+      finish ["{\"choices\":[{\"delta\":{\"content\":\"cut\"},\"finish_reason\":\"length\"}]}"] `shouldBe` Right FinishLength
+      finish ["{\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}"] `shouldBe` Right FinishRefusal
+      finish ["{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"native_finish_reason\":\"refusal\"}]}"] `shouldBe` Right FinishRefusal
+      finish ["{\"choices\":[{\"delta\":{\"refusal\":\"no\"}}]}", "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"] `shouldBe` Right FinishRefusal
+      finish ["{\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"] `shouldBe` Right FinishStop
 
     it "reads reasoning from reasoning_details" $
       fmap snd (fold ["{\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"hmm\"}]}}]}"])

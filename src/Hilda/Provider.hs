@@ -31,7 +31,7 @@ import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.List (dropWhileEnd)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
@@ -116,6 +116,7 @@ decodeReply v = maybe (first T.pack (parseEither parser v)) Left (providerError 
             <*> m .:? "tool_calls" .!= []
             <*> o .:? "usage" .!= mempty
             <*> m .:? "reasoning_details" .!= []
+            <*> (fromMaybe FinishStop <$> finishOf c m)
     nonEmpty = \case
       Just t | not (T.null (T.strip t)) -> Just t
       _ -> Nothing

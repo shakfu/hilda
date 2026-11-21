@@ -38,11 +38,13 @@ common shared
     , directory   >=1.3.7 && <1.4
     , filepath    >=1.4  && <1.6
     , text        >=2.0  && <2.2
+    , time        >=1.9  && <1.15
 
 library
   import:          shared
   hs-source-dirs:  src
   exposed-modules:
+    Hilda.Acp
     Hilda.Agent
     Hilda.App
     Hilda.Cli
@@ -84,11 +86,14 @@ test-suite spec
   hs-source-dirs: test
   main-is:        Spec.hs
   ghc-options:    -threaded
+  build-tool-depends: hilda:hilda
   other-modules:
+    AcpSpec
     AgentSpec
     FakeServer
     AppSpec
     CliSpec
+    HeadlessSpec
     ContextSpec
     MarkdownSpec
     PolicySpec
@@ -107,5 +112,6 @@ test-suite spec
     , http-client
     , network
     , optparse-applicative
+    , process
     , temporary             >=1.3  && <1.4
     , unix

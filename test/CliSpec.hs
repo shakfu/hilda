@@ -29,7 +29,7 @@ spec = do
       let o = parse ["-p", "hi", "--json", "--mode", "read-only", "--system", "be brief"]
       fmap optPrompt o `shouldBe` Just (Just "hi")
       fmap optOutput o `shouldBe` Just Json
-      fmap optMode o `shouldBe` Just ReadOnly
+      fmap modeOf o `shouldBe` Just ReadOnly
       fmap optSystem o `shouldBe` Just (Just (SystemText "be brief"))
     it "parses --append-system alongside --system" $ do
       let o = parse ["--system", "base", "--append-system", "more"]
@@ -50,7 +50,7 @@ spec = do
       parse ["--markdown=sometimes"] `shouldBe` Nothing
     it "defaults to text output, yolo and AGENTS.md discovery" $ do
       fmap optOutput (parse []) `shouldBe` Just Text
-      fmap optMode (parse []) `shouldBe` Just Yolo
+      fmap modeOf (parse []) `shouldBe` Just Yolo
       fmap optAgents (parse []) `shouldBe` Just Discover
     it "collects repeated --agents" $
       fmap optAgents (parse ["--agents", "a.md", "--agents", "b.md"]) `shouldBe` Just (Explicit ["a.md", "b.md"])
@@ -64,11 +64,18 @@ spec = do
         )
         ["-V", "--version"]
     it "accepts -M for --mode" $
-      fmap optMode (parse ["-M", "ask"]) `shouldBe` Just Ask
+      fmap modeOf (parse ["-M", "ask"]) `shouldBe` Just Ask
+    it "defaults to ask under --acp unless -M is given" $ do
+      fmap modeOf (parse ["--acp"]) `shouldBe` Just Ask
+      fmap modeOf (parse ["--acp", "-M", "yolo"]) `shouldBe` Just Yolo
     it "parses --context-budget and rejects zero" $ do
       fmap optBudget (parse []) `shouldBe` Just Nothing
       fmap optBudget (parse ["--context-budget", "8000"]) `shouldBe` Just (Just 8000)
       parse ["--context-budget", "0"] `shouldBe` Nothing
+    it "parses --context-window and rejects zero" $ do
+      fmap optWindow (parse []) `shouldBe` Just Nothing
+      fmap optWindow (parse ["--context-window", "128000"]) `shouldBe` Just (Just 128000)
+      parse ["--context-window", "0"] `shouldBe` Nothing
     it "parses --max-cost and rejects zero" $ do
       fmap optCostLimit (parse []) `shouldBe` Just Nothing
       fmap optCostLimit (parse ["--max-cost", "0.5"]) `shouldBe` Just (Just 0.5)
@@ -84,6 +91,9 @@ spec = do
       fmap optContinue (parse []) `shouldBe` Just False
       fmap optContinue (parse ["--continue"]) `shouldBe` Just True
       fmap optContinue (parse ["-c"]) `shouldBe` Just True
+    it "parses --resume" $ do
+      fmap optResume (parse []) `shouldBe` Just Nothing
+      fmap optResume (parse ["--resume", "ab12", "-p", "hi"]) `shouldBe` Just (Just "ab12")
     it "rejects a --max-turns of zero" $
       parse ["--max-turns", "0"] `shouldBe` Nothing
     it "rejects an unknown mode" $
@@ -97,6 +107,15 @@ spec = do
     let startWith args = maybe (Left "parse failed") start (parse args)
     it "starts a plain REPL without words" $
       startWith [] `shouldBe` Right (Interactive Nothing)
+    it "starts an ACP server with --acp" $
+      startWith ["--acp", "-M", "ask"] `shouldBe` Right Acp
+    it "refuses --acp with -p, --json, --stream-json, PROMPT..., -c, --resume or --no-session" $
+      mapM_ (\args -> startWith ("--acp" : args) `shouldSatisfy` isLeft)
+        [["-p", "hi"], ["--json"], ["--stream-json"], ["task"], ["-c"], ["--resume", "ab12"], ["--no-session"]]
+    it "takes --no-session with -p and the REPL" $ do
+      fmap optNoSession (parse ["--no-session", "-p", "hi"]) `shouldBe` Just True
+      fmap optNoSession (parse []) `shouldBe` Just False
+      startWith ["--no-session", "-c"] `shouldBe` Right (Interactive Nothing)
     it "joins words with single spaces as the first REPL entry" $
       startWith ["--", "fix  the", "build"] `shouldBe` Right (Interactive (Just "fix  the build"))
     it "resumes a session and enters the prompt with --continue" $
@@ -112,6 +131,11 @@ spec = do
       startWith ["--json"] `shouldSatisfy` isLeft
     it "rejects --continue with -p" $
       startWith ["-c", "-p", "hi"] `shouldSatisfy` isLeft
+    it "allows --resume with -p and in the REPL" $ do
+      startWith ["--resume", "ab12", "-p", "hi"] `shouldBe` Right (Headless (Just "hi"))
+      startWith ["--resume", "ab12"] `shouldBe` Right (Interactive Nothing)
+    it "rejects --resume with --continue" $
+      startWith ["-c", "--resume", "ab12"] `shouldSatisfy` isLeft
 
   describe "contextBudget" $
     it "takes half the context window, at most 100000" $

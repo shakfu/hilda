@@ -50,7 +50,7 @@ call :: Text -> Text -> Value -> ToolCall
 call i name args = ToolCall i name (T.pack (BL.unpack (encode args)))
 
 reply :: Maybe Text -> [ToolCall] -> Reply
-reply t cs = Reply t cs (Usage 10 5 0 (Just 0.5)) []
+reply t cs = Reply t cs (Usage 10 5 0 (Just 0.5)) [] FinishStop
 
 -- | Tool results in the order they were appended.
 toolResults :: [Message] -> [(Text, Text)]
@@ -74,7 +74,7 @@ spec = do
 
   it "keeps a reply's reasoning and sends it with the next request" $ do
     let r = object ["type" .= ("reasoning.text" :: Text), "text" .= ("t" :: Text)]
-        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r]
+        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r] FinishStop
     (complete, requests) <- scripted [first', reply (Just "ok") []]
     _ <- runTurn (mkEnv complete Yolo True) [] "go"
     reqs <- requests
@@ -82,7 +82,7 @@ spec = do
 
   describe "when the provider rejects kept reasoning" $ do
     let r = object ["type" .= ("reasoning.encrypted" :: Text), "data" .= ("sig" :: Text)]
-        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r]
+        first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r] FinishStop
         -- Observed live: the streamed failure, then a non-streamed replay.
         rejected = Left "Error in $: provider error: Gemini models require OpenRouter reasoning details to be preserved in each request. Please refer to our docs: https:"
         rejectedRaw = Left "provider error: Provider returned error: Gemini models require OpenRouter reasoning details to be preserved in each request. Please refer to our docs: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#preserving-reasoning-blocks. Upstream error: {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Corrupted thought signature.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}"
@@ -224,7 +224,7 @@ spec = do
 
   it "warns when a cost limit is set but no cost is reported" $ do
     warned <- newIORef False
-    (complete, _) <- scripted [Reply (Just "ok") [] mempty []]
+    (complete, _) <- scripted [Reply (Just "ok") [] mempty [] FinishStop]
     let env = (mkEnv complete Yolo True) {envCostLimit = Just 1}
         hooks = (envHooks env) {onEvent = \case
           CostUnknown -> writeIORef warned True

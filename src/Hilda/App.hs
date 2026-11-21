@@ -2,8 +2,11 @@
 module Hilda.App
   ( Config (..)
   , Output (..)
+  , Saved (..)
+  , contextBudget
   , versionText
   , runHeadless
+  , headlessFailure
   , eventJson
   , deltaJson
   , outcomeJson
@@ -38,6 +41,7 @@ data Config = Config
   , cfgSystem   :: Text
   , cfgMaxTurns :: Int
   , cfgBudget   :: Text -> IO Int -- ^ Context budget for a model, in estimated tokens.
+  , cfgWindow   :: Text -> IO (Maybe Int) -- ^ A model's context window in tokens, if known.
   , cfgCostLimit :: Maybe Double -- ^ Spending limit in credits (USD on OpenRouter).
   , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
   , cfgColor    :: Bool -- ^ Color status and tool lines on a terminal (off: @--no-color@).
@@ -55,9 +59,25 @@ data Output
   | StreamJson -- ^ One object per event on stdout, then the outcome.
   deriving stock (Eq, Show)
 
--- | Run one prompt to completion and return the exit code.
-runHeadless :: Config -> Output -> Text -> IO ExitCode
-runHeadless cfg output prompt = do
+-- | Budget in tokens for a context window: half of it, leaving room for the
+-- reply and for undercounting at 4 characters per token, at most 100000,
+-- which also limits the cost per call. 100000 when the window is unknown.
+contextBudget :: Maybe Int -> Int
+contextBudget = maybe cap (\n -> max 1 (min cap (n `div` 2)))
+  where
+    cap = 100000
+
+-- | The session a headless run continues and saves.
+data Saved = Saved
+  { savedId      :: Text
+  , savedHistory :: [Message] -- ^ Earlier messages, without the system prompt.
+  , savedWrite   :: Maybe ([Message] -> IO ()) -- ^ Nothing: @--no-session@, no transcript is saved.
+  }
+
+-- | Run one prompt to completion after the saved history, save the new
+-- history, and return the exit code.
+runHeadless :: Config -> Output -> Saved -> Text -> IO ExitCode
+runHeadless cfg output saved prompt = do
   budget <- cfgBudget cfg (cfgModel cfg)
   paint <- (\on -> if on && cfgColor cfg then ansi else plain) <$> colorEnabled stderr
   styled <- markdownEnabled (cfgMarkdown cfg) stdout
@@ -70,8 +90,15 @@ runHeadless cfg output prompt = do
         Text | terminal -> liveOutput stderr paint (Live True False False) (cfgComplete cfg)
         StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
         _ -> cfgComplete cfg
-  out <- runTurn (env budget complete (emit paint)) [System (cfgSystem cfg)] prompt
+  out <- runTurn (env budget complete (emit paint)) (System (cfgSystem cfg) : savedHistory saved) prompt
   when (outTurns out > 0) (cfgRemember cfg (cfgModel cfg))
+  -- An unsaved session reports no id, so a caller cannot resume a stale one.
+  sid <- case savedWrite saved of
+    Nothing -> pure Nothing
+    Just write ->
+      try @IOException (write (drop 1 (outHistory out))) >>= \case
+        Left e -> Nothing <$ hPutStrLn stderr ("hilda: session not saved: " <> show e)
+        Right () -> pure (Just (savedId saved))
   case output of
     Text -> do
       case outStop out of
@@ -79,8 +106,8 @@ runHeadless cfg output prompt = do
         TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
         CostLimit -> TIO.hPutStrLn stderr ("hilda: stopped at the cost limit, " <> maybe "" formatCost (usageCost (outUsage out)) <> " spent (--max-cost)")
         Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> printable e)
-      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> "]"))
-    _ -> jsonLine (outcomeJson cfg out)
+      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> maybe "" (" | session " <>) sid <> "]"))
+    _ -> jsonLine (outcomeJson cfg sid out)
   pure (exitCodeFor (outStop out))
   where
     env budget complete onEv =
@@ -103,6 +130,15 @@ runHeadless cfg output prompt = do
       StreamJson -> jsonLine . eventJson
     -- Flush per line: stdout is block-buffered when piped.
     jsonLine v = BL.putStrLn (encode v) >> hFlush stdout
+
+-- | Report an error that stopped a headless run before it began: on
+-- stderr, and with @--json@ or @--stream-json@ also as the result object.
+headlessFailure :: Config -> Output -> Text -> IO ExitCode
+headlessFailure cfg output e = do
+  TIO.hPutStrLn stderr ("hilda: " <> e)
+  when (output /= Text) $
+    BL.putStrLn (encode (outcomeJson cfg Nothing (Outcome [] "" 0 mempty 0 (Failed e) FinishStop))) >> hFlush stdout
+  pure (exitCodeFor (Failed e))
 
 -- | Ask on the terminal. Without one (piped stdin, CI), or at end of
 -- input, the answer is no.
@@ -143,8 +179,8 @@ eventJson = \case
   ReasoningDropped -> object ["type" .= ("reasoning_dropped" :: Text)]
 
 -- | The final @result@ object of @--json@ and @--stream-json@.
-outcomeJson :: Config -> Outcome -> Value
-outcomeJson cfg out =
+outcomeJson :: Config -> Maybe Text -> Outcome -> Value
+outcomeJson cfg sid out =
   object
     [ "type" .= ("result" :: Text)
     , "result" .= outText out
@@ -158,6 +194,7 @@ outcomeJson cfg out =
     , "provider" .= kindName (cfgProvider cfg)
     , "model" .= cfgModel cfg
     , "mode" .= modeName (cfgMode cfg)
+    , "session_id" .= sid
     , "messages" .= outHistory out
     ]
   where

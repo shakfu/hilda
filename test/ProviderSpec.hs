@@ -81,14 +81,14 @@ spec = do
       fmap replyReasoning (replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"t\"}]}}]}")
         `shouldBe` Right [r]
     it "drops the blocks unless kept" $ do
-      let backend _ _ = pure (Right (Reply Nothing [] mempty [r]))
+      let backend _ _ = pure (Right (Reply Nothing [] mempty [r] FinishStop))
       fmap replyReasoning <$> withoutReasoning backend (const (pure ())) (Request "m" [] [])
         `shouldReturn` Right []
 
   describe "decodeReply" $ do
     it "reads text and usage" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}"
-        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4 0 Nothing) [])
+        `shouldBe` Right (Reply (Just "hi") [] (Usage 3 4 0 Nothing) [] FinishStop)
     it "reads OpenRouter's cost" $
       fmap replyUsage (replyFrom "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"cost\":0.0021}}")
         `shouldBe` Right (Usage 3 4 0 (Just 0.0021))
@@ -99,13 +99,16 @@ spec = do
       Usage 1 2 0 (Just 0.5) <> Usage 3 4 0 Nothing `shouldBe` Usage 4 6 0 (Just 0.5)
       Usage 1 2 0 Nothing <> Usage 3 4 0 Nothing `shouldBe` Usage 4 6 0 Nothing
     it "treats blank content as absent" $
-      replyFrom "{\"choices\":[{\"message\":{\"content\":\"  \"}}]}" `shouldBe` Right (Reply Nothing [] mempty [])
+      replyFrom "{\"choices\":[{\"message\":{\"content\":\"  \"}}]}" `shouldBe` Right (Reply Nothing [] mempty [] FinishStop)
+    it "reads truncation and refusal from a whole response" $ do
+      replyFinish <$> replyFrom "{\"choices\":[{\"message\":{\"content\":\"cut\"},\"finish_reason\":\"length\"}]}" `shouldBe` Right FinishLength
+      replyFinish <$> replyFrom "{\"choices\":[{\"message\":{\"content\":null,\"refusal\":\"no\"},\"finish_reason\":\"stop\"}]}" `shouldBe` Right FinishRefusal
     it "reads tool calls with string arguments" $
       replyFrom "{\"choices\":[{\"message\":{\"content\":null,\"tool_calls\":[{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}"
-        `shouldBe` Right (Reply Nothing [ToolCall "a" "bash" "{\"command\":\"ls\"}"] mempty [])
+        `shouldBe` Right (Reply Nothing [ToolCall "a" "bash" "{\"command\":\"ls\"}"] mempty [] FinishStop)
     it "accepts tool arguments sent as an object" $
       replyFrom "{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"a\",\"function\":{\"name\":\"bash\",\"arguments\":{\"command\":\"ls\"}}}]}}]}"
-        `shouldBe` Right (Reply Nothing [ToolCall "a" "bash" "{\"command\":\"ls\"}"] mempty [])
+        `shouldBe` Right (Reply Nothing [ToolCall "a" "bash" "{\"command\":\"ls\"}"] mempty [] FinishStop)
     it "reports an error object returned with status 200" $
       replyFrom "{\"error\":{\"message\":\"rate limited\",\"code\":429}}"
         `shouldBe` Left "provider error: rate limited"
@@ -157,7 +160,7 @@ spec = do
             \data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n\
             \data: [DONE]\n\n"
       ((r, deltas), _) <- serve [Canned 200 "text/event-stream" events]
-      r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 0 Nothing) [])
+      r `shouldBe` Right (Reply (Just "Hello") [] (Usage 3 1 0 Nothing) [] FinishStop)
       deltas `shouldBe` [TextDelta "Hel", TextDelta "lo"]
     it "fails a stream reset mid-body without retrying" $ do
       ((r, deltas), n) <- serve [Reset "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n", ok]
