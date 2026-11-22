@@ -75,6 +75,7 @@ data Request = Request
   { reqModel    :: Text
   , reqMessages :: [Message]
   , reqTools    :: [Value] -- ^ Tool specs in function-calling format.
+  , reqMaxTokens :: Maybe Int -- ^ Output cap; set only inside a family ("Hilda.Family").
   }
   deriving stock (Eq, Show)
 

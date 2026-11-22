@@ -16,6 +16,14 @@ spec = do
     let bash = ToolCall "c1" "bash" "{\"command\":\"git status\"}"
     it "starts a tool line with the tool and its main argument" $
       renderEvent plain (CallStarted bash) `shouldBe` Partial "[bash] git status "
+    it "prints agent calls as whole lines, since sub-agent lines come between" $ do
+      let agent = ToolCall "c2" "agent" "{\"task\":\"count lines\"}"
+      renderEvent plain (CallStarted agent) `shouldBe` Full "[agent] count lines"
+      renderEvent plain (CallFinished agent (Right "42")) `shouldBe` Full "[agent] -> ~1"
+    it "prints a sub-agent's finished call as one labelled line, and nothing at its start" $ do
+      renderEvent plain (Sub "agent-1" (CallStarted bash)) `shouldBe` Partial ""
+      renderEvent plain (Sub "agent-1" (CallFinished bash (Right "ok"))) `shouldBe` Full "  [agent-1] [bash] git status -> ~1"
+      renderEvent plain (Sub "agent-1" (Sub "agent-2" (CallFinished bash (Right "ok")))) `shouldBe` Full "  [agent-2] [bash] git status -> ~1"
     it "escapes control characters in narration" $
       renderEvent plain (Narration "x\ESC]0;title\a") `shouldBe` Full "x\\x1b]0;title\\x07"
     it "finishes the line with an estimated token count" $
@@ -73,7 +81,7 @@ spec = do
 
   describe "liveOutput" $ do
     let reply = Right (Reply Nothing [] mempty [] FinishStop)
-        req = Request "m" [] []
+        req = Request "m" [] [] Nothing
         streams delay = \sink _ -> threadDelay delay >> sink (TextDelta "hel") >> sink (TextDelta "lo") >> pure reply
         run live backend = withSystemTempFile "live" $ \path h -> do
           seen <- newIORef []

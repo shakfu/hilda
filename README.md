@@ -143,6 +143,22 @@ Other tool output over the result limit (a quarter of `--context-budget`, at mos
 | `ask` | run | confirm on the terminal, showing every argument in full; refused without a terminal. With `--acp`, the client is asked |
 | `read-only` | run | not offered to the model; refused if called |
 
+## Recursion
+
+`-r` offers the model a fifth tool, `agent {task}`. It runs a sub-agent on the task with a fresh history and returns the sub-agent's final answer as the tool result. `agent` calls in one reply run concurrently. Off by default.
+
+```sh
+hilda -r --budget-tokens 200000 -p "summarise each module in src/Hilda"
+```
+
+- **Inheritance:** a sub-agent runs in the same process, with the parent's mode, model, system prompt, `--max-turns` and context budget. In `ask` mode its calls are confirmed like the parent's, one at a time. In `read-only` mode it gets only `read` and `agent`.
+- **Depth:** `--max-depth N` (default 2) limits nesting. The top agent is depth 0; an agent at depth N is not offered `agent`.
+- **Budget:** `--budget-tokens N` is required with `-r` and covers every model call in the family. Each call reserves its input and an output grant first, sent as `max_tokens`; calls wait while other calls' reservations fill the budget. A call that settled spending leaves no room for fails, and so does the agent that made it. With `-r`, `--max-cost` also counts the whole family.
+- **Output:** text mode prints one line per finished sub-agent call, e.g. `  [agent-1] [bash] git status -> ~40`. `--stream-json` adds an `agent` field to sub-agent events, and the `result` object has `family`: `usage`, `spent_tokens` and `budget_tokens`. Under `--acp`, sub-agent calls are ordinary `tool_call` updates.
+- **Limits:** sub-agent transcripts are not saved. The parent waits for its `agent` calls to finish. A server that refuses `max_tokens` and names `max_completion_tokens`, as OpenAI's reasoning models do, gets that field instead; local servers are untested.
+
+Design: `docs/dev/recursion.md`.
+
 ## System prompt
 
 The system prompt is assembled in this order:

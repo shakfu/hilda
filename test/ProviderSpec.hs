@@ -25,22 +25,27 @@ spec :: Spec
 spec = do
   describe "encodeRequest" $ do
     it "asks for a stream and omits tools when there are none" $
-      keys (encodeRequest OpenAICompatible Nothing (Request "m" [User "hi"] [])) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
+      keys (encodeRequest OpenAICompatible Nothing (Request "m" [User "hi"] [] Nothing)) `shouldMatchList` ["model", "messages", "stream", "stream_options"]
+    it "sends max_tokens only when the request has a cap" $ do
+      keys (encodeRequest OpenRouter Nothing (Request "m" [] [] Nothing)) `shouldNotContain` ["max_tokens"]
+      keys (encodeRequest OpenAICompatible Nothing (Request "m" [] [] (Just 4096))) `shouldContain` ["max_tokens"]
+    it "renames max_tokens to max_completion_tokens" $
+      keys (completionCap (encodeRequest OpenAICompatible Nothing (Request "m" [] [] (Just 10)))) `shouldMatchList` ["model", "messages", "stream", "stream_options", "max_completion_tokens"]
     it "sends tools with tool_choice auto" $ do
-      let v = encodeRequest OpenAICompatible Nothing (Request "m" [] [object []])
+      let v = encodeRequest OpenAICompatible Nothing (Request "m" [] [object []] Nothing)
       keys v `shouldMatchList` ["model", "messages", "stream", "stream_options", "tools", "tool_choice"]
 
   describe "reasoning effort" $ do
-    let field kind k = KM.lookup k =<< (\case Object o -> Just o; _ -> Nothing) (encodeRequest kind (Just "high") (Request "m" [] []))
+    let field kind k = KM.lookup k =<< (\case Object o -> Just o; _ -> Nothing) (encodeRequest kind (Just "high") (Request "m" [] [] Nothing))
     it "sends reasoning.effort to OpenRouter" $
       field OpenRouter "reasoning" `shouldBe` Just (object ["effort" .= ("high" :: String)])
     it "sends reasoning_effort to OpenAI-compatible servers" $
       field OpenAICompatible "reasoning_effort" `shouldBe` Just (String "high")
     it "sends neither without an effort" $
-      keys (encodeRequest OpenRouter Nothing (Request "m" [] [])) `shouldNotContain` ["reasoning"]
+      keys (encodeRequest OpenRouter Nothing (Request "m" [] [] Nothing)) `shouldNotContain` ["reasoning"]
 
   describe "cache_control" $ do
-    let has kind model = "cache_control" `elem` keys (encodeRequest kind Nothing (Request model [] []))
+    let has kind model = "cache_control" `elem` keys (encodeRequest kind Nothing (Request model [] [] Nothing))
     it "marks Anthropic models on OpenRouter" $
       has OpenRouter "anthropic/claude-x" `shouldBe` True
     it "leaves other models and providers alone" $ do
@@ -82,7 +87,7 @@ spec = do
         `shouldBe` Right [r]
     it "drops the blocks unless kept" $ do
       let backend _ _ = pure (Right (Reply Nothing [] mempty [r] FinishStop))
-      fmap replyReasoning <$> withoutReasoning backend (const (pure ())) (Request "m" [] [])
+      fmap replyReasoning <$> withoutReasoning backend (const (pure ())) (Request "m" [] [] Nothing)
         `shouldReturn` Right []
 
   describe "decodeReply" $ do
@@ -127,7 +132,7 @@ spec = do
         call port = do
           Right complete <- newCompleteWith 1 (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing Nothing)
           seen <- newIORef []
-          r <- complete (\d -> modifyIORef seen (d :)) (Request "m" [User "hi"] [])
+          r <- complete (\d -> modifyIORef seen (d :)) (Request "m" [User "hi"] [] Nothing)
           (,) r . reverse <$> readIORef seen
         serve responses = do
           port <- freePort
@@ -139,6 +144,18 @@ spec = do
     it "waits as long as Retry-After says on a 429" $ do
       r <- timeout 900000 (serve [RateLimited 0, ok])
       fmap (fmap replyText . fst . fst) r `shouldBe` Just (Right (Just "ok"))
+    it "resends a capped request with max_completion_tokens when the server asks for it" $ do
+      let refusal = json 400 "{\"error\":{\"message\":\"Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead.\"}}"
+      port <- freePort
+      (r, n) <- withServer port 0 [refusal, ok] $ do
+        Right complete <- newCompleteWith 1 (Provider OpenAICompatible ("http://127.0.0.1:" <> show port <> "/v1") Nothing Nothing)
+        complete (const (pure ())) (Request "m" [User "hi"] [] (Just 10))
+      fmap replyText r `shouldBe` Right (Just "ok")
+      n `shouldBe` 2
+    it "does not resend an uncapped request" $ do
+      ((r, _), n) <- serve [json 400 "use max_completion_tokens", ok]
+      r `shouldSatisfy` isLeft
+      n `shouldBe` 1
     it "does not retry a 500" $ do
       ((r, _), n) <- serve [json 500 "boom", ok]
       r `shouldBe` Left "HTTP 500: boom"

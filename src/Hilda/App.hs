@@ -11,17 +11,20 @@ module Hilda.App
   , deltaJson
   , outcomeJson
   , exitCodeFor
+  , familyReport
   ) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Text (Text)
 import Data.Version (showVersion)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Hilda.Agent
+import Hilda.Family
 import Hilda.Policy
 import Hilda.Markdown (renderMarkdown)
 import Hilda.Render
@@ -46,6 +49,7 @@ data Config = Config
   , cfgRemember :: Text -> IO () -- ^ Record a model that answered, for the next run.
   , cfgColor    :: Bool -- ^ Color status and tool lines on a terminal (off: @--no-color@).
   , cfgMarkdown :: When -- ^ When to style reply text as markdown (@--markdown@).
+  , cfgFamily   :: Maybe Family -- ^ @-r@: the @agent@ tool and the family budget.
   }
 
 -- | Shown by @--version@ and at REPL start.
@@ -90,7 +94,8 @@ runHeadless cfg output saved prompt = do
         Text | terminal -> liveOutput stderr paint (Live True False False) (cfgComplete cfg)
         StreamJson -> \sink -> cfgComplete cfg (\d -> jsonLine (deltaJson d) >> sink d)
         _ -> cfgComplete cfg
-  out <- runTurn (env budget complete (emit paint)) (System (cfgSystem cfg) : savedHistory saved) prompt
+  out <- runTurn (attach (cfgFamily cfg) (cfgSystem cfg) (env budget complete (emit paint))) (System (cfgSystem cfg) : savedHistory saved) prompt
+  family <- traverse familyReport (cfgFamily cfg)
   when (outTurns out > 0) (cfgRemember cfg (cfgModel cfg))
   -- An unsaved session reports no id, so a caller cannot resume a stale one.
   sid <- case savedWrite saved of
@@ -106,8 +111,8 @@ runHeadless cfg output saved prompt = do
         TurnLimit -> hPutStrLn stderr ("hilda: stopped after " <> show (outTurns out) <> " model calls (--max-turns)")
         CostLimit -> TIO.hPutStrLn stderr ("hilda: stopped at the cost limit, " <> maybe "" formatCost (usageCost (outUsage out)) <> " spent (--max-cost)")
         Failed e  -> TIO.hPutStrLn stderr ("hilda: " <> printable e)
-      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> maybe "" (" | session " <>) sid <> "]"))
-    _ -> jsonLine (outcomeJson cfg sid out)
+      TIO.hPutStrLn stderr (paint Dim ("[" <> renderUsage (outUsage out) <> " | context: " <> T.pack (show (outContext out)) <> maybe "" ((" | " <>) . fst) family <> maybe "" (" | session " <>) sid <> "]"))
+    _ -> jsonLine (withField "family" (snd <$> family) (outcomeJson cfg sid out))
   pure (exitCodeFor (outStop out))
   where
     env budget complete onEv =
@@ -130,6 +135,22 @@ runHeadless cfg output saved prompt = do
       StreamJson -> jsonLine . eventJson
     -- Flush per line: stdout is block-buffered when piped.
     jsonLine v = BL.putStrLn (encode v) >> hFlush stdout
+
+-- | The family's spending as text and as JSON.
+familyReport :: Family -> IO (Text, Value)
+familyReport fam = do
+  usage <- familyUsage fam
+  spent <- familySpent fam
+  let tshow = T.pack . show
+  pure
+    ( "family: " <> renderUsage usage <> ", " <> tshow spent <> " of " <> tshow (familyLimit fam) <> " budget tokens"
+    , object ["usage" .= usage, "spent_tokens" .= spent, "budget_tokens" .= familyLimit fam]
+    )
+
+-- | Add a field to a JSON object when the value is present.
+withField :: Key -> Maybe Value -> Value -> Value
+withField k (Just v) (Object o) = Object (KM.insert k v o)
+withField _ _ v = v
 
 -- | Report an error that stopped a headless run before it began: on
 -- stderr, and with @--json@ or @--stream-json@ also as the result object.
@@ -162,6 +183,10 @@ deltaJson = \case
 -- | Stream-json line for one event. Tool output is truncated as the model sees it.
 eventJson :: Event -> Value
 eventJson = \case
+  -- The deepest label wins: each child tags its own events.
+  Sub l ev -> case eventJson ev of
+    Object o | not (KM.member "agent" o) -> Object (KM.insert "agent" (String l) o)
+    v -> v
   Narration t -> object ["type" .= ("text" :: Text), "text" .= t]
   CallStarted c ->
     object ["type" .= ("tool_call" :: Text), "id" .= callId c, "name" .= callName c, "arguments" .= callArgs c]

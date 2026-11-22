@@ -156,6 +156,7 @@ spec = do
                 ContextTrimmed {} -> record "trimmed"
                 CostUnknown -> record "cost unknown"
                 ReasoningDropped -> record "reasoning dropped"
+                Sub _ _ -> record "sub"
             , confirm = \_ -> record "confirm" >> pure True
             }
     _ <- runTurn (mkEnv complete Ask True) {envHooks = hooks} [] "write it"

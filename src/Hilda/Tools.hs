@@ -6,6 +6,8 @@ module Hilda.Tools
   ( Effect (..)
   , Tool (..)
   , toolSpec
+  , schema
+  , withArgs
   , builtinTools
   , readTool
   , writeTool
@@ -43,7 +45,11 @@ import System.Process
 import System.Timeout (timeout)
 
 -- | What a tool can do to the machine. Policies decide on this, not names.
-data Effect = Observe | Mutate | Execute
+data Effect
+  = Observe
+  | Mutate
+  | Execute
+  | Delegate -- ^ Start a sub-agent, which inherits the mode.
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | A tool the model can call.

@@ -42,6 +42,7 @@ import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import Hilda.Agent
 import Hilda.App (Config (..), contextBudget)
+import Hilda.Family (attach)
 import Hilda.Policy (Verdict (..), authorize)
 import Hilda.Provider (ProviderKind (..))
 import Hilda.Render (Line (..), callSummary, plain, renderEvent)
@@ -366,7 +367,7 @@ runPrompt srv s open text = withMVar (srvTurn srv) $ \_ -> do
       -- Recorded with the update, so a cancel finds every call announced.
       announce tid fields = mask_ (modifyIORef' open (Set.insert tid) >> say (object fields))
       -- Whether a call nobody was asked about runs: the mode, else a rule.
-      runs c = case find ((== callName c) . toolName) tools of
+      runs c = case find ((== callName c) . toolName) (envTools env) of
         Nothing -> pure False
         Just tool -> case authorize (cfgMode cfg) (toolEffect tool) of
           Allow -> pure True
@@ -392,12 +393,16 @@ runPrompt srv s open text = withMVar (srvTurn srv) $ \_ -> do
             ]
         -- Already streamed as agent_message_chunk.
         Narration _ -> pure ()
+        -- A sub-agent's calls are announced like the agent's own; their
+        -- ids carry the sub-agent's label, so they cannot collide.
+        Sub _ (Narration _) -> pure ()
+        Sub _ ev -> onEv ev
         ev -> case renderEvent plain ev of
-          Partial t -> TIO.hPutStrLn stderr t
+          Partial t -> unless (T.null t) (TIO.hPutStrLn stderr t)
           Full t -> TIO.hPutStrLn stderr t
       tools = builtinTools (resultLimitFor budget)
       env =
-        Env
+        attach (cfgFamily cfg) (sesSystem s) $ Env
           { envComplete = tally (sesSpent s) complete
           , envModel = cfgModel cfg
           , envTools = tools

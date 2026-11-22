@@ -11,6 +11,7 @@ module Hilda.Provider
   , keyVariable
   , efforts
   , encodeRequest
+  , completionCap
   , decodeReply
   , newComplete
   , newCompleteWith
@@ -28,6 +29,8 @@ import System.Timeout (timeout)
 import Data.Aeson
 import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.Bifunctor (first)
+import qualified Data.Aeson.KeyMap as KM
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.List (dropWhileEnd)
@@ -94,12 +97,20 @@ encodeRequest kind effort r =
     ]
       <> ["cache_control" .= object ["type" .= ("ephemeral" :: Text)] | caches]
       <> maybe [] reasoning effort
+      <> maybe [] (\n -> ["max_tokens" .= n]) (reqMaxTokens r)
       <> if null (reqTools r) then [] else ["tools" .= reqTools r, "tool_choice" .= ("auto" :: Text)]
   where
     caches = kind == OpenRouter && "anthropic/" `T.isPrefixOf` reqModel r
     reasoning e = case kind of
       OpenRouter       -> ["reasoning" .= object ["effort" .= e]]
       OpenAICompatible -> ["reasoning_effort" .= e]
+
+-- | The body with @max_tokens@ renamed to @max_completion_tokens@, which
+-- OpenAI's reasoning models require and refuse the other for.
+completionCap :: Value -> Value
+completionCap = \case
+  Object o | Just n <- KM.lookup "max_tokens" o -> Object (KM.insert "max_completion_tokens" n (KM.delete "max_tokens" o))
+  v -> v
 
 -- | Decode a chat-completions response body. OpenRouter can report errors
 -- with status 200 and an @error@ object, so that is checked first.
@@ -171,13 +182,25 @@ newCompleteWith idle p =
     Nothing -> pure (Left ("invalid base URL: " <> T.pack (providerBaseUrl p)))
     Just base -> do
       mgr <- newTlsManagerWith tlsManagerSettings {H.managerResponseTimeout = H.responseTimeoutMicro (600 * 1000000)}
-      let prepare r =
+      -- Set once the server names max_completion_tokens in a rejection.
+      -- Few servers other than OpenAI's accept that field, so it is
+      -- learned rather than sent everywhere.
+      renamed <- newIORef False
+      let prepare alt r =
             base
               { H.method = "POST"
               , H.requestHeaders = headers p
-              , H.requestBody = H.RequestBodyLBS (encode (encodeRequest (providerKind p) (providerEffort p) r))
+              , H.requestBody = H.RequestBodyLBS (encode ((if alt then completionCap else id) (encodeRequest (providerKind p) (providerEffort p) r)))
               }
-      pure (Right (\sink r -> send idle mgr (prepare r) sink))
+          complete sink r = do
+            alt <- readIORef renamed
+            send idle mgr (prepare alt r) sink >>= \case
+              Left err
+                | not alt, reqMaxTokens r /= Nothing, "max_completion_tokens" `T.isInfixOf` err -> do
+                    writeIORef renamed True
+                    send idle mgr (prepare True r) sink
+              reply -> pure reply
+      pure (Right complete)
 
 -- | A retry carries the server's Retry-After, in seconds, if it sent one.
 data Attempt = Retry (Maybe Int) Text | Done (Either Text Reply)

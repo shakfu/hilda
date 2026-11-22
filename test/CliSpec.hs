@@ -105,6 +105,13 @@ spec = do
 
   describe "start" $ do
     let startWith args = maybe (Left "parse failed") start (parse args)
+    it "needs --budget-tokens with -r, and -r with --budget-tokens" $ do
+      startWith ["-r"] `shouldSatisfy` isLeft
+      startWith ["--budget-tokens", "1000"] `shouldSatisfy` isLeft
+      startWith ["-r", "--budget-tokens", "1000", "-p", "hi"] `shouldBe` Right (Headless (Just "hi"))
+      fmap optMaxDepth (parse []) `shouldBe` Just 2
+      fmap optMaxDepth (parse ["--max-depth", "1"]) `shouldBe` Just 1
+      parse ["--max-depth", "0"] `shouldBe` Nothing
     it "starts a plain REPL without words" $
       startWith [] `shouldBe` Right (Interactive Nothing)
     it "starts an ACP server with --acp" $

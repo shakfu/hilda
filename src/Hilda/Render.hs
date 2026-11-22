@@ -146,13 +146,40 @@ data Line = Partial Text | Full Text
 renderEvent :: Paint -> Event -> Line
 renderEvent paint = \case
   Narration t -> Full (paint Dim (printable (T.strip t)))
-  CallStarted c -> Partial (paint Cyan ("[" <> callName c <> "]") <> " " <> callSummary c <> " ")
-  CallFinished _ (Right r) -> Full (paint Dim ("-> ~" <> tshow (estimateTokens r)))
-  CallFinished _ (Left e) -> Full (paint Red ("-> error: " <> printable (elide 100 e)))
+  -- Full lines for agent calls: sub-agent lines print while they run.
+  CallStarted c
+    | callName c == "agent" -> Full (callHead paint c)
+    | otherwise -> Partial (callHead paint c <> " ")
+  CallFinished c r
+    | callName c == "agent" -> Full (paint Cyan "[agent]" <> " " <> callResult paint r)
+    | otherwise -> Full (callResult paint r)
+  Sub label ev -> case innermost label ev of
+    (l, CallFinished c r) -> Full ("  " <> paint Dim ("[" <> l <> "]") <> " " <> callHead paint c <> " " <> callResult paint r)
+    (_, CallStarted _) -> Partial ""
+    (_, Narration _) -> Partial ""
+    (l, e) -> case renderEvent paint e of
+      Full t -> Full ("  " <> paint Dim ("[" <> l <> "]") <> " " <> t)
+      Partial _ -> Partial ""
   CostUnknown -> Full (paint Red "[--max-cost has no effect: the provider reports no cost]")
   ReasoningDropped -> Full (paint Red "[the provider rejected the kept reasoning; resending without it]")
   ContextTrimmed n chars ->
     Full (paint Dim ("[context: elided " <> tshow n <> " old tool message" <> (if n == 1 then "" else "s") <> ", ~" <> tshow (chars `div` 4) <> " tokens]"))
+
+-- | @[bash] git status@.
+callHead :: Paint -> ToolCall -> Text
+callHead paint c = paint Cyan ("[" <> callName c <> "]") <> " " <> callSummary c
+
+-- | @-> ~40@, or the error.
+callResult :: Paint -> Either Text Text -> Text
+callResult paint = \case
+  Right r -> paint Dim ("-> ~" <> tshow (estimateTokens r))
+  Left e -> paint Red ("-> error: " <> printable (elide 100 e))
+
+-- | The label and event of the deepest sub-agent.
+innermost :: Text -> Event -> (Text, Event)
+innermost l = \case
+  Sub l' e -> innermost l' e
+  e -> (l, e)
 
 -- | The argument that identifies the call (command or path), else the raw
 -- arguments; one line, at most 80 characters.
@@ -160,7 +187,7 @@ callSummary :: ToolCall -> Text
 callSummary c = elide 80 . visible $ (fromMaybe (callArgs c) (primary =<< decodeStrict (encodeUtf8 (callArgs c))))
   where
     primary = \case
-      Object o -> listToMaybe [s | k <- ["command", "path"], Just (String s) <- [KM.lookup k o]]
+      Object o -> listToMaybe [s | k <- ["command", "path", "task"], Just (String s) <- [KM.lookup k o]]
       _ -> Nothing
 
 -- | Rough token count of a tool result as the model receives it, at four

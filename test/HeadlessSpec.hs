@@ -90,6 +90,22 @@ spec = around (withSystemTempDirectory "hilda") $ do
     code' `shouldBe` ExitFailure 1
     (field "error" =<< r') `shouldSatisfy` maybe False (\case String e -> "invalid session id" `T.isInfixOf` e; _ -> False)
 
+  it "delegates to a sub-agent with -r and reports the family's spending" $ \dir -> do
+    let state = dir </> "state"
+        delegate =
+          json 200 . BS8.pack $
+            "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\","
+              <> "\"function\":{\"name\":\"agent\",\"arguments\":\"{\\\"task\\\":\\\"count\\\"}\"}}]}}],"
+              <> "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"cost\":0.001}}"
+    port <- freePort
+    -- One model at a time: the root, then the child, then the root again.
+    ((code, r, _), _) <-
+      withServer port 0 [delegate, answer "42", answer "it is 42"] $
+        hilda state dir (fromIntegral port) ["-r", "--budget-tokens", "100000", "--no-session", "--json", "-p", "count"]
+    code `shouldBe` ExitSuccess
+    (field "result" =<< r) `shouldBe` Just (String "it is 42")
+    (field "spent_tokens" =<< field "family" =<< r) `shouldBe` Just (Number 36)
+
   it "saves no transcript with --no-session and reports no session_id" $ \dir -> do
     let state = dir </> "state"
     port <- freePort

@@ -10,7 +10,25 @@
 
 ## Medium
 
+- [ ] **`-r`: live runs on Gemini and OpenRouter.** Only OpenAI and Anthropic are measured (`docs/dev/recursion.md`, Measured). Run `scripts/live_recurse.py gemini openrouter --task sum --budget-tokens 50000` first: Gemini's OpenAI-compatible endpoint may reject `stream_options` or the tool format. Then `--task large --budget-tokens 400000`. The default model ids for both are unverified.
+
+- [ ] **The context budget undercounts code by about 1.4x.** Under `--context-budget 8000`, calls averaged 12,570 prompt tokens: numeric code ran at about 2.8 characters per token against the estimate's 4, and tool specs are not counted (`docs/dev/recursion.md`, Measured). This affects hilda without `-r`, most on local models with 8k to 32k windows. Count the tool specs; consider 3 characters per token, or calibrate from each reply's reported `prompt_tokens`.
+
+- [ ] **`-r`: approve a sub-agent's call in the REPL by hand.** In `-M ask`, the confirmation prompt then runs on a sub-agent's thread while the main thread waits in `mapConcurrently`. Check that y/n works and that Ctrl-C declines the call rather than hanging, since `throwTo` waits while the target is in a foreign call.
+
 ## Low
+
+- [ ] **Prompt caching for Claude through `-P openai`.** Opus through `https://api.anthropic.com/v1` reported 0 cached tokens; 139,893 tokens on one `large` run were billed uncached. hilda adds `cache_control` only for `anthropic/` models on OpenRouter. Find out whether Anthropic's OpenAI-compatible endpoint caches at all; if not, document OpenRouter as the route for Claude.
+
+- [ ] **Reasoning with tools on OpenAI's own API.** `gpt-6-luna` on `/v1/chat/completions` refuses function tools unless `reasoning_effort` is `none`, so it needs `--reasoning none` there. Reasoning with tools needs `/v1/responses`, a second wire format. OpenRouter is the workaround.
+
+- [ ] **`-r`: a grant takes the whole remainder.** Under a budget below about one 32,000-token grant per running member, requests wait for each other. Measured effect is small (`broad` time ratio 2.64 at a 100,000 budget, 2.06 at 300,000). If it matters, grant `max(4096, min(ceiling, remaining / running members))`; the risk is cutting off a long reply.
+
+- [ ] **`-r`: ACP `usage_update` cost counts only the top agent.** Sub-agent spending shows in REPL and headless usage lines, not in ACP. Add the family's usage to the session's cost.
+
+- [ ] **`-r`: a cancel, or an error other than a 4xx, costs its full hold.** Its real usage is unknown. Settle with partial usage where the stream reported some before the failure.
+
+- [ ] **`-r`: sub-agent transcripts are not saved.** Only the top agent's history is. Save each sub-agent under its label if a failed delegation needs debugging after the fact.
 
 - [ ] **Upstream the isocline fix.** Send `vendor/isocline.patch` (the `tty_esc.c` part) to daanx/isocline. Delete `vendor/` and depend on Hackage once a release parses `ESC [ 27 ; mods ; key ~`.
 
@@ -33,6 +51,8 @@
 ## Watch
 
 Risks not observed in use. Fix when one is.
+
+- [ ] **`-r`: the output cap on local servers.** Inside a family each request carries `max_tokens` (or `max_completion_tokens`, once a server asks for it). Ollama and llama.cpp are untested.
 
 - [ ] **Truncated streamed error.** A streamed OpenRouter error was recorded ending at "https:"; the non-streamed replay had the full text. Capture the raw SSE of a failing stream to find out whether OpenRouter or hilda cuts it.
 

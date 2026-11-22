@@ -18,6 +18,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Hilda.Agent
 import Hilda.App
+import Hilda.Family (attach)
 import Hilda.Policy
 import Hilda.Render
 import Hilda.Tools
@@ -152,7 +153,8 @@ interactive readLine initial paint spent restored save cfg = do
         Failed e  -> say (paint Red ("error: " <> printable e))
       total <- readIORef spent
       when (outTurns out > 0) (cfgRemember cfg (sesModel s))
-      say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> " | context: " <> tshow (outContext out) <> "]"))
+      family <- maybe (pure "") (fmap ((" | " <>) . fst) . familyReport) (cfgFamily cfg)
+      say (paint Dim ("[turn: " <> renderUsage (outUsage out) <> " | session: " <> renderUsage total <> family <> " | context: " <> tshow (outContext out) <> "]"))
       persist (outHistory out)
       pure s {sesHistory = outHistory out, sesContext = outContext out, sesCalls = sesCalls s + outTurns out}
 
@@ -163,7 +165,7 @@ interactive readLine initial paint spent restored save cfg = do
         Right () -> pure ()
 
     env s spentCost =
-      Env
+      attach (cfgFamily cfg) (cfgSystem cfg) $ Env
         { envComplete = cfgComplete cfg
         , envModel = sesModel s
         , envTools = tools s
@@ -205,7 +207,7 @@ interactive readLine initial paint spent restored save cfg = do
         budget <- cfgBudget cfg m
         s {sesModel = m, sesBudget = budget} <$ say ("model: " <> m <> ", context budget " <> tshow budget)
       ListTools ->
-        s <$ mapM_ (\t -> say (toolName t <> " - " <> toolDescription t)) (visibleTools (sesMode s) (tools s))
+        s <$ mapM_ (\t -> say (toolName t <> " - " <> toolDescription t)) (visibleTools (sesMode s) (envTools (env s 0)))
       ShowSystem -> s <$ say (printable (cfgSystem cfg))
       ShowUsage -> do
         total <- readIORef spent

@@ -25,6 +25,7 @@ import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (decodeUtf8Lenient)
 import Hilda.Acp (runAcp)
 import Hilda.App
+import Hilda.Family (familyComplete, newFamily)
 import Hilda.Policy
 import Hilda.Prompt
 import Hilda.Provider
@@ -73,6 +74,9 @@ data Options = Options
   , optNoColor  :: Bool
   , optMarkdown :: When
   , optAcp      :: Bool
+  , optRecurse  :: Bool
+  , optBudgetTokens :: Maybe Int -- ^ Required with 'optRecurse'.
+  , optMaxDepth :: Int
   , optWords    :: [Text] -- ^ Positional PROMPT words.
   }
   deriving stock (Eq, Show)
@@ -169,6 +173,15 @@ options =
           <> help "Style reply text as markdown. auto: on a terminal without NO_COLOR (default)"
       )
     <*> switch (long "acp" <> help "Serve the Agent Client Protocol (version 1) on stdin and stdout, for editors and brokers")
+    <*> switch (short 'r' <> long "recurse" <> help "Offer the agent tool: delegate tasks to sub-agents in the same mode. Needs --budget-tokens")
+    <*> optional
+      ( option
+          positive
+          (long "budget-tokens" <> metavar "N" <> help "With -r, required: tokens the agent and all its sub-agents may use together")
+      )
+    <*> option
+      positive
+      (long "max-depth" <> metavar "N" <> value 2 <> showDefault <> help "With -r: how deep sub-agents may nest. 1 lets only the top agent delegate")
     <*> many
       ( strArgument
           ( metavar "PROMPT..."
@@ -194,6 +207,8 @@ data Start
 -- | Choose what to run, or say which options conflict.
 start :: Options -> Either Text Start
 start o
+  | optRecurse o && isNothing (optBudgetTokens o) = Left "-r needs --budget-tokens N: the most tokens the agent and its sub-agents may use"
+  | not (optRecurse o) && isJust (optBudgetTokens o) = Left "--budget-tokens limits sub-agents; it needs -r"
   | optAcp o = acp
   | otherwise = case (optPrompt o, optWords o) of
     (Just _, _ : _) -> Left "PROMPT... starts the REPL; it cannot be used with -p"
@@ -314,12 +329,16 @@ main = do
   let windowFor = maybe (knownContext provider) (const . pure . Just) (optWindow o)
       budgetWith window = maybe (fmap contextBudget . window) (const . pure) (optBudget o)
       budgetFor = budgetWith windowFor
+  family <-
+    if optRecurse o
+      then traverse (\n -> newFamily n (optCostLimit o) (optMaxDepth o) complete) (optBudgetTokens o)
+      else pure Nothing
   cwd <- getCurrentDirectory
   system <- systemPrompt o cwd
   sessionPath <- sessionFile cwd
   let cfg =
         Config
-          { cfgComplete = complete
+          { cfgComplete = maybe complete familyComplete family
           , cfgProvider = providerKind provider
           , cfgModel = model
           , cfgMode = modeOf o
@@ -331,6 +350,7 @@ main = do
           , cfgRemember = saveModel
           , cfgColor = not (optNoColor o)
           , cfgMarkdown = optMarkdown o
+          , cfgFamily = family
           }
   -- A session chosen by id, its file and history.
   let resume sid =

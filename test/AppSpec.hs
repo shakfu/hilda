@@ -17,7 +17,7 @@ field :: Text -> Value -> Maybe Value
 field k = parseMaybe (withObject "event" (.: Key.fromText k))
 
 cfg :: Config
-cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) True Auto
+cfg = Config (\_ _ -> pure (Left "unused")) OpenRouter "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) True Auto Nothing
 
 spec :: Spec
 spec = do

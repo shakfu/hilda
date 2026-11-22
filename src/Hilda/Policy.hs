@@ -38,6 +38,8 @@ parseMode t = lookup (T.toLower t) [(modeName m, m) | m <- [minBound .. maxBound
 authorize :: Mode -> Effect -> Verdict
 authorize Yolo _           = Allow
 authorize _ Observe        = Allow
+-- The sub-agent runs in the same mode, so each of its calls is checked.
+authorize _ Delegate       = Allow
 authorize Ask _            = Confirm
 authorize ReadOnly effect  = Deny ("refused: " <> T.toLower (T.pack (show effect)) <> " is not allowed in read-only mode")
 

@@ -12,12 +12,14 @@ module Hilda.Agent
   , runTurn
   ) where
 
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson (Value (..), eitherDecodeStrict)
 import Data.Bifunctor (bimap, first)
 import Data.Foldable (find, traverse_)
+import Data.List (groupBy)
 import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
@@ -36,6 +38,7 @@ data Event
   | ContextTrimmed Int Int -- ^ Tool results elided, characters removed.
   | CostUnknown -- ^ A cost limit is set but the provider reports no cost.
   | ReasoningDropped -- ^ The provider rejected kept reasoning; resent without it.
+  | Sub Text Event -- ^ An event of the sub-agent with this label ("Hilda.Family").
 
 -- | How the loop reports events and asks the user.
 data Hooks m = Hooks
@@ -84,7 +87,7 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
       | otherwise = do
           let (hist, elided, chars) = fitContext (envBudget env) unfitted
           when (elided > 0) (onEvent (envHooks env) (ContextTrimmed elided chars))
-          liftIO (envComplete env (const (pure ())) (Request (envModel env) hist specs)) >>= \case
+          liftIO (envComplete env (const (pure ())) (Request (envModel env) hist specs Nothing)) >>= \case
             Left err
               -- Dropped from the whole history: after a reroute it holds
               -- signatures from two upstreams, and neither accepts both.
@@ -103,7 +106,7 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
                 then pure (Outcome hist' (fromMaybe "" text) (n + 1) usage' ctx' Finished finish)
                 else do
                   traverse_ (onEvent (envHooks env) . Narration) text
-                  results <- traverse (dispatch env) calls
+                  results <- runCalls env calls
                   go (n + 1) usage' ctx' (hist' <> results)
     spentAll usage = case envCostLimit env of
       Just limit -> envSpent env + fromMaybe 0 (usageCost usage) >= limit
@@ -127,29 +130,56 @@ dropReasoning = \case
   Assistant t calls _ -> Assistant t calls []
   m -> m
 
+-- | Run a reply's tool calls in order. Consecutive 'Delegate' calls run
+-- concurrently; their results keep call order. Other calls run one at a
+-- time, since a later call may depend on an earlier one.
+runCalls :: MonadIO m => Env m -> [ToolCall] -> m [Message]
+runCalls env calls = concat <$> traverse batch (groupBy (\a b -> delegates a && delegates b) calls)
+  where
+    delegates c = maybe False ((== Delegate) . toolEffect) (lookupTool env c)
+    batch = \case
+      [c] -> pure <$> dispatch env c
+      cs -> do
+        permits <- traverse (admit env) cs
+        results <- liftIO (mapConcurrently (uncurry execute) (zip permits cs))
+        sequence (zipWith (report env) cs results)
+
+lookupTool :: Env m -> ToolCall -> Maybe Tool
+lookupTool env c = find ((== callName c) . toolName) (envTools env)
+
 -- | Authorise and run one tool call. Every failure becomes a tool result
 -- the model can read, so the loop itself never fails on a tool.
--- Confirmation happens before 'CallStarted', so a prompt never splits the
--- started and finished output of one call.
 dispatch :: MonadIO m => Env m -> ToolCall -> m Message
-dispatch env call = do
-  permitted <- case find ((== callName call) . toolName) (envTools env) of
+dispatch env call = admit env call >>= \p -> liftIO (execute p call) >>= report env call
+
+-- | Authorise a call and report it started. Confirmation happens before
+-- 'CallStarted', so a prompt never splits the started and finished output
+-- of one call.
+admit :: MonadIO m => Env m -> ToolCall -> m (Either Text Tool)
+admit env call = do
+  permitted <- case lookupTool env call of
     Nothing -> pure (Left ("unknown tool: " <> callName call))
     Just tool -> case authorize (envMode env) (toolEffect tool) of
       Allow -> pure (Right tool)
       Deny why -> pure (Left why)
       Confirm ->
-        confirm hooks call <&> \case
+        confirm (envHooks env) call <&> \case
           True -> Right tool
           False -> Left "the user declined this tool call"
-  onEvent hooks (CallStarted call)
-  result <- either (pure . Left) (\tool -> liftIO (runTool tool (callArgs call))) permitted
+  permitted <$ onEvent (envHooks env) (CallStarted call)
+
+-- | Run an admitted call.
+execute :: Either Text Tool -> ToolCall -> IO (Either Text Text)
+execute permitted call = either (pure . Left) (\tool -> runTool tool (callArgs call)) permitted
+
+-- | Truncate a result, report it and wrap it as a message.
+report :: MonadIO m => Env m -> ToolCall -> Either Text Text -> m Message
+report env call result = do
   -- Cut before the event, so observers see what the model receives.
   let cut = bimap (truncateMiddle limit) (truncateMiddle limit) result
-  onEvent hooks (CallFinished call cut)
+  onEvent (envHooks env) (CallFinished call cut)
   pure (ToolResult (callId call) (either ("error: " <>) id cut))
   where
-    hooks = envHooks env
     limit = resultLimitFor (envBudget env)
 
 -- | Decode the arguments and run the tool. Bad JSON and IO errors become 'Left'.

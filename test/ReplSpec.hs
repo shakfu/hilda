@@ -23,7 +23,7 @@ session initial rest = do
       backend _ r = do
         modifyIORef' seen (const [m | m@(User _) <- reqMessages r])
         pure (Right (Reply (Just "ok") [] (Usage 1 1 0 Nothing) [] FinishStop))
-      cfg = Config backend OpenAICompatible "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) False Never
+      cfg = Config backend OpenAICompatible "m" Yolo "sys" 5 (const (pure 1000)) (const (pure Nothing)) Nothing (const (pure ())) False Never Nothing
   interactive readLine initial plain spent [] (modifyIORef' saved . const) cfg
   (,) <$> readIORef seen <*> readIORef saved
 
@@ -43,7 +43,7 @@ spec = do
   it "tallies the usage of every completed call" $ do
     ref <- newIORef mempty
     let backend _ _ = pure (Right (Reply Nothing [] (Usage 10 2 0 (Just 0.5)) [] FinishStop))
-        call = tally ref backend (const (pure ())) (Request "m" [] [])
+        call = tally ref backend (const (pure ())) (Request "m" [] [] Nothing)
     _ <- call
     _ <- call
     readIORef ref `shouldReturn` Usage 20 4 0 (Just 1.0)

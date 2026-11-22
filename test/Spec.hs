@@ -5,6 +5,7 @@ import qualified AgentSpec
 import qualified AppSpec
 import qualified CliSpec
 import qualified ContextSpec
+import qualified FamilySpec
 import qualified HeadlessSpec
 import qualified MarkdownSpec
 import qualified PolicySpec
@@ -24,6 +25,7 @@ main = hspec $ do
   describe "App" AppSpec.spec
   describe "Cli" CliSpec.spec
   describe "Context" ContextSpec.spec
+  describe "Family" FamilySpec.spec
   describe "Headless" HeadlessSpec.spec
   describe "Markdown" MarkdownSpec.spec
   describe "Policy" PolicySpec.spec
