@@ -10,6 +10,7 @@ module Hilda.Agent
   , Stop (..)
   , Outcome (..)
   , runTurn
+  , tally
   ) where
 
 import Control.Concurrent.Async (mapConcurrently)
@@ -21,6 +22,7 @@ import Data.Bifunctor (bimap, first)
 import Data.Foldable (find, traverse_)
 import Data.List (groupBy)
 import Data.Functor ((<&>))
+import Data.IORef (IORef, modifyIORef')
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -111,6 +113,14 @@ runTurn env history prompt = go 0 mempty 0 (history <> [User prompt])
     spentAll usage = case envCostLimit env of
       Just limit -> envSpent env + fromMaybe 0 (usageCost usage) >= limit
       Nothing -> False
+
+-- | Add the usage of each completed call to @ref@, so calls in a turn
+-- abandoned with Ctrl-C still count toward the session.
+tally :: IORef Usage -> Complete -> Complete
+tally ref complete sink req = do
+  r <- complete sink req
+  mapM_ (modifyIORef' ref . (<>) . replyUsage) r
+  pure r
 
 -- | A provider refusing reasoning blocks it did not issue. OpenRouter can
 -- route one Gemini conversation to Vertex and then AI Studio, and each

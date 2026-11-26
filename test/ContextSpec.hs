@@ -30,6 +30,9 @@ results hist = [t | ToolResult _ t <- hist]
 
 spec :: Spec
 spec = do
+  it "takes half the context window as the budget, at most 100000" $
+    map contextBudget [Nothing, Just 1048576, Just 200000, Just 128000, Just 8192, Just 1]
+      `shouldBe` [100000, 100000, 100000, 64000, 4096, 1]
   it "estimates four characters per token" $
     historyTokens [User (big 400), ToolResult "a" (big 400)] `shouldBe` 200
 

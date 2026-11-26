@@ -7,7 +7,6 @@ module Hilda.Cli
   , optionsInfo
   , start
   , resolveProvider
-  , contextBudget
   , modeOf
   , main
   ) where
@@ -25,6 +24,7 @@ import qualified Data.Text.IO as TIO
 import Data.Text.Encoding (decodeUtf8Lenient)
 import Hilda.Acp (runAcp)
 import Hilda.App
+import Hilda.Context (contextBudget)
 import Hilda.Family (familyComplete, newFamily)
 import Hilda.Policy
 import Hilda.Prompt

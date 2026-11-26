@@ -1,6 +1,6 @@
 # Changelog
 
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/) for the command-line interface; the library modules are internal.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/): for the command-line interface in `hilda`, and for the `Hilda` module in `hilda-core`. Other `Hilda.*` modules may change in any release.
 
 ## [Unreleased]
 
@@ -39,6 +39,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - CI on GitHub Actions: build, tests, and a Haddock coverage check that fails below 100%.
 
 ### Changed
+
+- hilda is two packages. `hilda-core` is the library, with the curated `Hilda` module as its entry point. `hilda` (`hilda/`) holds the executable and the frontend modules: `Cli`, `Repl`, `App`, `Acp`, `Render`, `Markdown` and `State`. The library drops `isocline` and `optparse-applicative`. `contextBudget` moved to `Hilda.Context` and `tally` to `Hilda.Agent`, since ACP needed both and the core may not import a frontend. `State` went to the CLI: its files sit under hilda's own XDG directory, which an embedder does not share. `FakeServer` is in a third, unpublished package, `hilda-test-support`, used by the tests of both, so test-only code stays off Hackage. Two packages, not a private sublibrary, so the library can be published without the CLI's dependencies.
 
 - Each tool result is limited to a quarter of `--context-budget` (in characters, at 4 per token), at most the previous 30,000. Before, one read could exceed a small budget. In a live run at 6000 tokens, elision then thrashed: the model re-read elided files, asked for files that do not exist and hit `--max-turns`. A quarter, not a half, because elision never touches the newest results, and three parallel results still fit in the three quarters it trims to. Rejecting small budgets would be simpler, but would exclude 8k-context local models.
 

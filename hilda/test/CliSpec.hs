@@ -144,11 +144,6 @@ spec = do
     it "rejects --resume with --continue" $
       startWith ["-c", "--resume", "ab12"] `shouldSatisfy` isLeft
 
-  describe "contextBudget" $
-    it "takes half the context window, at most 100000" $
-      map contextBudget [Nothing, Just 1048576, Just 200000, Just 128000, Just 8192, Just 1]
-        `shouldBe` [100000, 100000, 100000, 64000, 4096, 1]
-
   describe "resolveProvider" $ do
     it "passes --reasoning to the provider" $
       fmap (providerEffort . fst) (resolve [("OPENROUTER_API_KEY", "k")] [] ["-m", "a/b", "--reasoning", "low"])

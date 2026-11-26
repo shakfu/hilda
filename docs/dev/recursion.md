@@ -91,10 +91,10 @@ A failed sub-agent call reaches the parent as `error: agent-N failed: ...`. The 
 |-|-|
 | `test/FamilySpec.hs` | answers; concurrency (a barrier that deadlocks if calls run in sequence); read-only and depth tools; ask confirmations, serialized, with tagged ids; failures; event labels; family `--max-cost`; cancellation; grants as `max_tokens`; failing, waiting, settling and cancelled holds |
 | `test/PolicySpec.hs` | `Delegate` allowed in every mode |
-| `test/RenderSpec.hs` | `agent` and `Sub` lines |
+| `hilda/test/RenderSpec.hs` | `agent` and `Sub` lines |
 | `test/ProviderSpec.hs` | `max_tokens` only when capped |
-| `test/CliSpec.hs` | `-r`, `--budget-tokens` and `--max-depth` validation |
-| `test/HeadlessSpec.hs` | a `-r -p` run against `FakeServer`, with the family's spending in the result |
+| `hilda/test/CliSpec.hs` | `-r`, `--budget-tokens` and `--max-depth` validation |
+| `hilda/test/HeadlessSpec.hs` | a `-r -p` run against `FakeServer`, with the family's spending in the result |
 
 ## Limits
 

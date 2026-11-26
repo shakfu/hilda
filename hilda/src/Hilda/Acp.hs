@@ -41,12 +41,12 @@ import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import Hilda.Agent
-import Hilda.App (Config (..), contextBudget)
+import Hilda.App (Config (..))
+import Hilda.Context (contextBudget)
 import Hilda.Family (attach)
 import Hilda.Policy (Verdict (..), authorize)
 import Hilda.Provider (ProviderKind (..))
 import Hilda.Render (Line (..), callSummary, plain, renderEvent)
-import Hilda.Repl (tally)
 import Hilda.State (idSessionFile, loadIdSession, newSessionId, saveIdSession)
 import Hilda.Tools (Tool (..), builtinTools, resultLimitFor)
 import Hilda.Types

@@ -1,5 +1,5 @@
 -- | ACP sessions end to end: runs the built @hilda --acp@ against
--- 'FakeServer' over pipes, with state in a temporary directory.
+-- "Hilda.FakeServer" over pipes, with state in a temporary directory.
 module AcpSpec (spec) where
 
 import Control.Exception (finally)
@@ -12,7 +12,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import FakeServer
+import Hilda.FakeServer
 import Hilda.Acp
 import Hilda.Agent (Stop (..))
 import Hilda.Types (Finish (..))

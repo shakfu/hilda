@@ -28,7 +28,7 @@ License: SSPL-1.0 or AGPL-3.0-only. hilda is MIT, so take ideas only, not code.
 - **Effect typeclasses with Safe Haskell** (`Agent.IO.Effects`, `Internal.RIO`). The types prove which effects each mode may perform. hilda's `bash` tool gives the model every effect at run time, so a type-level proof about `write` says nothing about what the model can do. `authorize` in `Hilda.Policy` fits a shell-capable agent.
 - **IFC/MAC modules** (`Agent.Control.IFC`, `Agent.Control.MAC`). These are information-flow and mandatory-access-control types. No other module imports them.
 - **`LLM_SIGN_SHA` self-hash check.** It runs `sha256sum` and `pwd` from `PATH` and compares the result to an env var. Anyone who can edit the script can also change that env var or `PATH`.
-- **`smock.sh`**, an `nc` loop that returns one fixed JSON reply. `test/FakeServer.hs` does more.
+- **`smock.sh`**, an `nc` loop that returns one fixed JSON reply. `hilda-test-support/src/Hilda/FakeServer.hs` does more.
 - **Path confinement by `isPrefixOf`** in `llmCodeGet`. It checks the prefix with no trailing separator, so root `/repo/src` also accepts `/repo/src2/...`. Avoid this pattern if hilda adds confinement.
 
 ### Not yet examined

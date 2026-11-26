@@ -1,5 +1,5 @@
 -- | End-to-end headless sessions: runs the built @hilda@ against
--- 'FakeServer', with state in a temporary directory.
+-- "Hilda.FakeServer", with state in a temporary directory.
 module HeadlessSpec (spec) where
 
 import Data.Aeson (Value (..), decodeStrict, (.:))
@@ -8,7 +8,7 @@ import Data.Aeson.Types (parseMaybe, withObject)
 import qualified Data.ByteString.Char8 as BS8
 import Data.Text (Text)
 import qualified Data.Text as T
-import FakeServer
+import Hilda.FakeServer
 import Data.List (sort)
 import Data.Time.Clock (addUTCTime, getCurrentTime, nominalDay)
 import System.Directory (createDirectory, createDirectoryIfMissing, listDirectory, setModificationTime)

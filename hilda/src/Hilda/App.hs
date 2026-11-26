@@ -3,7 +3,6 @@ module Hilda.App
   ( Config (..)
   , Output (..)
   , Saved (..)
-  , contextBudget
   , versionText
   , runHeadless
   , headlessFailure
@@ -62,14 +61,6 @@ data Output
   | Json       -- ^ One outcome object on stdout.
   | StreamJson -- ^ One object per event on stdout, then the outcome.
   deriving stock (Eq, Show)
-
--- | Budget in tokens for a context window: half of it, leaving room for the
--- reply and for undercounting at 4 characters per token, at most 100000,
--- which also limits the cost per call. 100000 when the window is unknown.
-contextBudget :: Maybe Int -> Int
-contextBudget = maybe cap (\n -> max 1 (min cap (n `div` 2)))
-  where
-    cap = 100000
 
 -- | The session a headless run continues and saves.
 data Saved = Saved

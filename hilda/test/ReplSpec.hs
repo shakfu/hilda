@@ -40,13 +40,6 @@ spec = do
     parseInput "/frob" `shouldBe` Run (Unknown "frob")
   it "sends // as a prompt starting with /" $
     parseInput "//etc/hosts is wrong" `shouldBe` Prompt "/etc/hosts is wrong"
-  it "tallies the usage of every completed call" $ do
-    ref <- newIORef mempty
-    let backend _ _ = pure (Right (Reply Nothing [] (Usage 10 2 0 (Just 0.5)) [] FinishStop))
-        call = tally ref backend (const (pure ())) (Request "m" [] [] Nothing)
-    _ <- call
-    _ <- call
-    readIORef ref `shouldReturn` Usage 20 4 0 (Just 1.0)
   describe "interactive" $ do
     it "submits the initial entry as the first prompt" $ do
       (seen, saved) <- session (Just "fix the build") []

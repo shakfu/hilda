@@ -1,6 +1,6 @@
 -- | A minimal HTTP server for provider tests: canned responses in order,
 -- one per connection, on 127.0.0.1.
-module FakeServer
+module Hilda.FakeServer
   ( Canned (..)
   , json
   , freePort
@@ -25,6 +25,7 @@ data Canned
   | Stall BS.ByteString BS.ByteString
   | RateLimited Int -- ^ A 429 with Retry-After in seconds.
 
+-- | A complete @application/json@ response with the given status.
 json :: Int -> BS.ByteString -> Canned
 json code = Canned code "application/json"
 

@@ -48,7 +48,7 @@ References: [Messages API](https://docs.claude.com/en/api/messages), [streaming]
    - add `Anthropic`;
    - key variable `ANTHROPIC_API_KEY`, required;
    - base URL from `ANTHROPIC_BASE_URL`;
-   - extend the default order in `resolveProvider` (`src/Hilda/Cli.hs`).
+   - extend the default order in `resolveProvider` (`hilda/src/Hilda/Cli.hs`).
 4. **Retry on 529 `overloaded_error`.** The server did not run the request, so it fits the rule in `retryableStatus`.
 5. **Tests** (about 200 lines). Cover these with SSE fixtures:
    - plain text;
@@ -64,7 +64,7 @@ Total: 450-650 lines including tests.
 
 ## Failure modes
 
-- **Thinking with tool use.** With thinking enabled, the thinking blocks of the current tool loop must be sent back unchanged ([extended thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking#preserving-thinking-blocks)). By default hilda wraps the client in `withoutReasoning` (`src/Hilda/Cli.hs`), which drops every block. So with `--reasoning`, the Anthropic provider must keep at least the current loop's blocks, whatever `--keep-reasoning` says. Verify.
+- **Thinking with tool use.** With thinking enabled, the thinking blocks of the current tool loop must be sent back unchanged ([extended thinking](https://docs.claude.com/en/docs/build-with-claude/extended-thinking#preserving-thinking-blocks)). By default hilda wraps the client in `withoutReasoning` (`hilda/src/Hilda/Cli.hs`), which drops every block. So with `--reasoning`, the Anthropic provider must keep at least the current loop's blocks, whatever `--keep-reasoning` says. Verify.
 - **Stored reasoning format.** `Assistant`'s `[Value]` holds OpenRouter `reasoning_details` blocks. Two options:
   - Convert to and from OpenRouter's `reasoning.text` shape (`signature`, `format: anthropic-claude-v1`). Sessions then stay portable between providers.
   - Store raw Anthropic blocks. This is simpler, but session files then depend on the provider.

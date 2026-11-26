@@ -40,6 +40,16 @@ make test      # cabal test
 make install   # copies a stripped hilda to ~/.local/bin (override: BINDIR=...)
 ```
 
+The repository holds two packages:
+
+- `hilda-core` (root): the library. The agent loop, providers, tools, modes, context budget and sub-agents. No terminal or option-parsing dependencies.
+- `hilda` (`hilda/`): the `hilda` executable. Options, REPL, headless output, ACP and session files.
+- `hilda-test-support` (`hilda-test-support/`): `Hilda.FakeServer`, an HTTP server with canned responses, for the tests of both. Local only, not published.
+
+## Library
+
+Depend on `hilda-core` and import `Hilda`; its module documentation has a complete example. A turn is `runTurn env history prompt`. `Env` holds the backend (`newComplete provider`), model, tools, mode and limits. `Hooks` receive events and answer `ask`-mode confirmations. The `Hilda.*` modules export more.
+
 `vendor/isocline` is the isocline 1.1.0 line editor with a fix that lets it read Shift+Enter; `vendor/isocline.patch` lists the changes.
 
 ## Providers and models
@@ -211,10 +221,10 @@ hilda --acp -P openrouter -m vendor/model
 
 Prompts run one at a time across sessions, since tools resolve paths against the process's working directory. Relative `--system-file`, `--append-system-file` and `--agents` paths resolve against the directory hilda started in.
 
-Conformance with the minos suite, against `test/acp-mock.py`:
+Conformance with the minos suite, against `hilda/test/acp-mock.py`:
 
 ```sh
-python3 test/acp-mock.py 18765 &
+python3 hilda/test/acp-mock.py 18765 &
 cd ../minos && ACP_STRICT=1 ACP_EXPECT_USAGE=1 ACP_SLOW_PROMPT=slow ACP_PERMISSION_PROMPT=permission make acp-conformance \
-  ACP_AGENT="$(cd ../hilda && cabal list-bin hilda) --acp -P openai --base-url http://127.0.0.1:18765/v1 -m mock -M ask --context-window 128000"
+  ACP_AGENT="$(cd ../hilda && cabal list-bin hilda:exe:hilda) --acp -P openai --base-url http://127.0.0.1:18765/v1 -m mock -M ask --context-window 128000"
 ```

@@ -7,12 +7,11 @@ module Hilda.Repl
   , parseInput
   , runRepl
   , interactive
-  , tally
   ) where
 
 import Control.Exception (AsyncException (UserInterrupt), IOException, handle, throwIO, try)
 import Control.Monad (mfilter, void, when)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, newIORef, readIORef)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -76,14 +75,6 @@ data Session = Session
   , sesCalls   :: Int -- ^ Model calls in finished turns, across /clear.
   , sesBudget  :: Int -- ^ Context budget for 'sesModel'.
   }
-
--- | Add the usage of each completed call to @ref@, so calls in a turn
--- abandoned with Ctrl-C still count toward the session.
-tally :: IORef Usage -> Complete -> Complete
-tally ref complete sink req = do
-  r <- complete sink req
-  mapM_ (modifyIORef' ref . (<>) . replyUsage) r
-  pure r
 
 -- | Streams reply text to stdout, with a waiting line before it on a
 -- terminal. Starts from @restored@, enters @initial@ as the first line if

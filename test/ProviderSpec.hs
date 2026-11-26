@@ -6,7 +6,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Either (isLeft)
 import qualified Data.Text as T
 import Data.IORef (modifyIORef, newIORef, readIORef)
-import FakeServer
+import Hilda.FakeServer
 import Hilda.Provider
 import Hilda.Types
 import qualified Network.HTTP.Client as H

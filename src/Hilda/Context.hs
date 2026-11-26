@@ -6,7 +6,8 @@
 -- text is kept. Elision is written into the history rather than applied per
 -- request, so the sent prefix stays stable for provider prompt caching.
 module Hilda.Context
-  ( historyTokens
+  ( contextBudget
+  , historyTokens
   , fitContext
   , elidedStub
   ) where
@@ -20,6 +21,14 @@ import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as TL
 import Hilda.Types
+
+-- | Budget in tokens for a context window: half of it, leaving room for the
+-- reply and for undercounting at 4 characters per token, at most 100000,
+-- which also limits the cost per call. 100000 when the window is unknown.
+contextBudget :: Maybe Int -> Int
+contextBudget = maybe cap (\n -> max 1 (min cap (n `div` 2)))
+  where
+    cap = 100000
 
 -- | Estimated tokens of a history as sent, at four characters per token.
 historyTokens :: [Message] -> Int

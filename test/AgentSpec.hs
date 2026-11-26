@@ -80,6 +80,14 @@ spec = do
     reqs <- requests
     [rs | Assistant _ _ rs <- reqMessages (reqs !! 1)] `shouldBe` [[r]]
 
+  it "tallies the usage of every completed call" $ do
+    ref <- newIORef mempty
+    let backend _ _ = pure (Right (Reply Nothing [] (Usage 10 2 0 (Just 0.5)) [] FinishStop))
+        call' = tally ref backend (const (pure ())) (Request "m" [] [] Nothing)
+    _ <- call'
+    _ <- call'
+    readIORef ref `shouldReturn` Usage 20 4 0 (Just 1.0)
+
   describe "when the provider rejects kept reasoning" $ do
     let r = object ["type" .= ("reasoning.encrypted" :: Text), "data" .= ("sig" :: Text)]
         first' = Reply Nothing [call "c" "read" (object ["path" .= ("/nonexistent" :: Text)])] mempty [r] FinishStop
