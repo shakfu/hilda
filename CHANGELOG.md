@@ -2,7 +2,7 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow the [Haskell PVP](https://pvp.haskell.org/): for the command-line interface in `hilda`, and for the `Hilda` module in `hilda-core`. Other `Hilda.*` modules may change in any release.
 
-## [Unreleased]
+## [0.2.0]
 
 ### Added
 
@@ -28,7 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 - Without `--context-budget`, the budget on OpenRouter is half the model's context window, at most 100,000. The window comes from OpenRouter's endpoints route, as the smallest among the model's upstreams, and is cached in `$XDG_STATE_HOME/hilda/contexts.json`. Half leaves room for the reply and for undercounting at 4 characters per token. A model with a 128k window now gets 64,000, not 100,000. Other providers keep 100,000, since they have no common way to report the window. `/model` in the REPL recomputes the budget for the new model; an explicit `--context-budget` is kept.
 
-- Multi-line prompts in the REPL: Shift+Enter or Ctrl+J starts a new line, and pasted text stays one prompt. The line editor is now isocline, not haskeline, which reads single lines only. isocline 1.1.0 stops after two parameters of xterm's `ESC [ 27 ; mods ; key ~`, which kitty, WezTerm and Ghostty send for Shift+Enter, so hilda vendors it with an 8-line parser fix (`vendor/isocline.patch`) until upstream parses the sequence. Ctrl-C at an `ask` confirmation now declines the call instead of abandoning the turn. The binary no longer links libtinfo.
+- Multi-line prompts in the REPL: Shift+Enter or Ctrl+J starts a new line, and pasted text stays one prompt. The line editor is now isocline, not haskeline, which reads single lines only. isocline 1.1.0 stops after two parameters of xterm's `ESC [ 27 ; mods ; key ~`, which kitty, WezTerm and Ghostty send for Shift+Enter, so hilda vendors it with an 8-line parser fix (`vendor/isocline.patch`) until upstream parses the sequence. A build from Hackage gets unpatched isocline; use Ctrl+J there. Ctrl-C at an `ask` confirmation now declines the call instead of abandoning the turn. The binary no longer links libtinfo.
 
 - Reply text is styled as markdown on a terminal: headings, bold, italic, code spans and code-block fences. The REPL styles it as it streams. A line-at-a-time renderer would delay a one-line paragraph until it ends, so hilda styles characters as they arrive and holds back only an ambiguous marker such as a trailing `*`. Styles end at each newline, so an unclosed marker affects one line.
 
@@ -40,7 +40,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ### Changed
 
-- hilda is two packages. `hilda-core` is the library, with the curated `Hilda` module as its entry point. `hilda` (`hilda/`) holds the executable and the frontend modules: `Cli`, `Repl`, `App`, `Acp`, `Render`, `Markdown` and `State`. The library drops `isocline` and `optparse-applicative`. `contextBudget` moved to `Hilda.Context` and `tally` to `Hilda.Agent`, since ACP needed both and the core may not import a frontend. `State` went to the CLI: its files sit under hilda's own XDG directory, which an embedder does not share. `FakeServer` is in a third, unpublished package, `hilda-test-support`, used by the tests of both, so test-only code stays off Hackage. Two packages, not a private sublibrary, so the library can be published without the CLI's dependencies.
+- hilda is now two packages. `hilda-core` is the library; start with the `Hilda` module. `hilda` (`hilda/`) is the executable, with options, REPL, ACP and session files. The library no longer depends on `isocline` or `optparse-applicative`. Separate packages let embedders skip the CLI's dependencies; a private sublibrary would not. Both test suites keep a copy of `Hilda.FakeServer`, so tests build from either tarball.
 
 - Each tool result is limited to a quarter of `--context-budget` (in characters, at 4 per token), at most the previous 30,000. Before, one read could exceed a small budget. In a live run at 6000 tokens, elision then thrashed: the model re-read elided files, asked for files that do not exist and hit `--max-turns`. A quarter, not a half, because elision never touches the newest results, and three parallel results still fit in the three quarters it trims to. Rejecting small budgets would be simpler, but would exclude 8k-context local models.
 
@@ -118,5 +118,6 @@ First release.
 
 - `-V`/`--version`.
 
-[0.1.1]: https://github.com/shakfu/hilda/releases/tag/v0.1.1
-[0.1.0]: https://github.com/shakfu/hilda/releases/tag/v0.1.0
+[0.2.0]: https://github.com/shakfu/hilda/releases/tag/0.2.0
+[0.1.1]: https://github.com/shakfu/hilda/releases/tag/0.1.1
+[0.1.0]: https://github.com/shakfu/hilda/releases/tag/0.1.0

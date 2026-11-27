@@ -8,6 +8,7 @@ build:
 	@cabal build all
 
 test:
+	@cmp test/Hilda/FakeServer.hs hilda/test/Hilda/FakeServer.hs
 	@cabal test all --test-show-details=direct
 
 run:

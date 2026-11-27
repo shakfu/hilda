@@ -1,6 +1,5 @@
 -- vendor/isocline: isocline 1.1.0 with a Shift+Enter fix; see vendor/isocline.patch.
--- hilda-test-support is local only: never upload it.
-packages: . hilda hilda-test-support vendor/isocline
+packages: . hilda vendor/isocline
 
 with-compiler: ghc-9.10.3
 

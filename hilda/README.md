@@ -9,3 +9,5 @@ The agent loop is the [`hilda-core`](https://hackage.haskell.org/package/hilda-c
 ```sh
 cabal install hilda
 ```
+
+isocline 1.1.0 cannot read Shift+Enter in kitty, WezTerm or Ghostty. With it, or any release without the fix, use Ctrl+J. A build from a [clone](https://github.com/shakfu/hilda) (`make install`) has the fix.

@@ -30,11 +30,13 @@ jobs:
 
       - run: cabal build all
 
+      - run: cmp test/Hilda/FakeServer.hs hilda/test/Hilda/FakeServer.hs
+
       - run: cabal test all --test-show-details=direct
 
       - name: Haddock coverage
         run: |
-          cabal haddock hilda-core:lib:hilda-core hilda-test-support:lib:hilda-test-support hilda:lib:hilda 2>&1 | tee haddock.log
+          cabal haddock hilda-core:lib:hilda-core hilda:lib:hilda 2>&1 | tee haddock.log
           # Only hilda's modules: vendor/isocline's docs may be built too.
           if grep -E "^ *[0-9]+% .* in 'Hilda[.']" haddock.log | grep -v '100%'; then
             echo "Haddock coverage dropped below 100%" >&2

@@ -36,7 +36,7 @@ Requires GHC 9.10 and cabal (both via ghcup) and `libgmp-dev`.
 
 ```sh
 make build     # cabal build all
-make test      # cabal test
+make test      # cabal test all
 make install   # copies a stripped hilda to ~/.local/bin (override: BINDIR=...)
 ```
 
@@ -44,7 +44,6 @@ The repository holds two packages:
 
 - `hilda-core` (root): the library. The agent loop, providers, tools, modes, context budget and sub-agents. No terminal or option-parsing dependencies.
 - `hilda` (`hilda/`): the `hilda` executable. Options, REPL, headless output, ACP and session files.
-- `hilda-test-support` (`hilda-test-support/`): `Hilda.FakeServer`, an HTTP server with canned responses, for the tests of both. Local only, not published.
 
 ## Library
 

@@ -3,6 +3,7 @@
 -- One turn against OpenRouter, with the four built-in tools, confirming
 -- every mutating call:
 --
+-- > {-# LANGUAGE OverloadedStrings #-}
 -- > import Hilda
 -- > import qualified Data.Text.IO as TIO
 -- >

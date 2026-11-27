@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               hilda-core
-version:            0.1.1
+version:            0.2.0
 synopsis:           A small coding agent library for OpenAI-compatible chat APIs
 description:
   The agent loop of hilda: a client for OpenAI-compatible chat-completions
@@ -76,6 +76,7 @@ test-suite spec
     AgentSpec
     ContextSpec
     FamilySpec
+    Hilda.FakeServer
     PolicySpec
     PromptSpec
     ProviderSpec
@@ -86,8 +87,8 @@ test-suite spec
     , async
     , containers
     , hilda-core
-    , hilda-test-support
     , hspec                 >=2.10 && <2.12
     , http-client
+    , network               >=3.1  && <3.3
     , temporary             >=1.3  && <1.4
     , unix
